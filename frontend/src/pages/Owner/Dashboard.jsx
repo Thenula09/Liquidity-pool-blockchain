@@ -1,9 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
+import { useNavigate } from 'react-router-dom';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import contractInfo from '../../contracts/contract-info.json';
 import SimplePoolABI from '../../contracts/SimplePool.json';
 
 export default function OwnerDashboard() {
+  const navigate = useNavigate();
   const [account, setAccount] = useState(null);
   const [liquidityAmount, setLiquidityAmount] = useState('');
   const [totalTHW, setTotalTHW] = useState(0);
@@ -14,46 +17,8 @@ export default function OwnerDashboard() {
   const [loading, setLoading] = useState(false);
   const [contractOwner, setContractOwner] = useState(null);
 
-  // Activity logging system
-  const [activityLog, setActivityLog] = useState([]);
-
-  // Add activity to log
-  const addActivity = (type, description, data = {}) => {
-    const newActivity = {
-      id: Date.now(),
-      timestamp: new Date().toLocaleString(),
-      type: type, // 'connect', 'disconnect', 'add_liquidity', 'remove_liquidity'
-      description: description,
-      account: account,
-      data: data
-    };
-    
-    setActivityLog(prev => [newActivity, ...prev].slice(0, 50)); // Keep last 50 activities
-    console.log(`📝 Activity Logged:`, newActivity);
-  };
-
-  // Update contract with read-only provider
-  const updateContract = async () => {
-    let provider;
-    if (window.ethereum && account) {
-      // Wallet connected - use Web3Provider with signer (Write access)
-      provider = new ethers.BrowserProvider(window.ethereum);
-    } else {
-      // Wallet disconnected - use JsonRpcProvider (Read access)
-      provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
-    }
-    
-    if (contractInfo.poolAddress && SimplePoolABI.abi) {
-      const poolContract = new ethers.Contract(contractInfo.poolAddress, SimplePoolABI.abi, provider);
-      setPoolContract(poolContract);
-      console.log("Contract updated with provider:", account ? "Web3Provider (Signer)" : "JsonRpcProvider (Read-only)");
-    }
-  };
-
-  // Update contract when account changes
-  useEffect(() => {
-    updateContract();
-  }, [account]);
+  // Real-time chart data state
+  const [chartData, setChartData] = useState([]);
 
   // Contract owner address
   const CONTRACT_OWNER_ADDRESS = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
@@ -64,95 +29,6 @@ export default function OwnerDashboard() {
   // Debug logs
   console.log("Current Account:", account);
   console.log("Is Owner?:", isOwner);
-
-  // Pool liquidity display
-  const PoolLiquidityDisplay = () => (
-    <div style={{ 
-      padding: '15px', 
-      backgroundColor: '#e8f4fd', 
-      borderRadius: '8px', 
-      marginBottom: '20px',
-      border: '1px solid #bee5eb'
-    }}>
-      <h4 style={{ color: '#0c5460', marginBottom: '10px', fontSize: '16px' }}>
-        💧 Current Pool Liquidity
-      </h4>
-      <div style={{ display: 'flex', gap: '20px', justifyContent: 'space-between' }}>
-        <div>
-          <div style={{ color: '#6c757d', fontSize: '12px' }}>ETH in Pool</div>
-          <div style={{ color: '#0c5460', fontSize: '18px', fontWeight: 'bold' }}>
-            {parseFloat(totalETH || 0).toFixed(4)} ETH
-          </div>
-        </div>
-        <div>
-          <div style={{ color: '#6c757d', fontSize: '12px' }}>THW in Pool</div>
-          <div style={{ color: '#0c5460', fontSize: '18px', fontWeight: 'bold' }}>
-            {parseFloat(totalTHW || 0).toFixed(2)} THW
-          </div>
-        </div>
-        <div>
-          <div style={{ color: '#6c757d', fontSize: '12px' }}>Current Price</div>
-          <div style={{ color: '#0c5460', fontSize: '18px', fontWeight: 'bold' }}>
-            1 THW = {parseFloat(currentPrice || 0).toFixed(6)} ETH
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  // Activity log display
-  const ActivityLogDisplay = () => (
-    <div style={{ 
-      padding: '15px', 
-      backgroundColor: '#fff3cd', 
-      borderRadius: '8px', 
-      marginBottom: '20px',
-      border: '1px solid #ffeaa7',
-      maxHeight: '300px',
-      overflow: 'auto'
-    }}>
-      <h4 style={{ color: '#856404', marginBottom: '10px', fontSize: '16px' }}>
-        📝 Activity Log
-      </h4>
-      {activityLog.length === 0 ? (
-        <div style={{ color: '#6c757d', fontSize: '14px' }}>
-          No activities yet. Connect your wallet to start.
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {activityLog.map((activity) => (
-            <div 
-              key={activity.id}
-              style={{ 
-                padding: '8px', 
-                backgroundColor: '#fff', 
-                borderRadius: '4px',
-                border: '1px solid #dee2e6',
-                fontSize: '12px'
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                <span style={{ fontWeight: 'bold', color: '#495057' }}>
-                  {activity.type.toUpperCase()}
-                </span>
-                <span style={{ color: '#6c757d' }}>
-                  {activity.timestamp}
-                </span>
-              </div>
-              <div style={{ color: '#495057' }}>
-                {activity.description}
-              </div>
-              {activity.account && (
-                <div style={{ color: '#6c757d', fontSize: '11px' }}>
-                  Account: {activity.account.slice(0, 6)}...{activity.account.slice(-4)}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 
   // Load contract owner
   const loadContractOwner = useCallback(async () => {
@@ -311,15 +187,57 @@ export default function OwnerDashboard() {
     }
   };
 
-  // Update data when account or contract changes
+  // Load pool data - works even without account connection
   useEffect(() => {
     if (poolContract) {
-      loadPoolData(); // Load pool data even when disconnected (read-only)
-      if (account) {
-        loadWalletBalance(); // Load wallet balance only when connected
-      }
+      loadPoolData();
+    }
+  }, [poolContract]);
+
+  // Load wallet balance - only when account is connected
+  useEffect(() => {
+    if (account && poolContract) {
+      loadWalletBalance();
     }
   }, [account, poolContract]);
+
+  // Real-time price fetching for chart
+  useEffect(() => {
+    const fetchPrice = async () => {
+      if (poolContract) {
+        try {
+          // Pool එකේ තියෙන ETH සහ THW ප්‍රමාණයන් ලබා ගැනීම
+          const ethReserves = await poolContract.totalEthInPool();
+          const thwReserves = await poolContract.totalTokensInPool();
+
+          const ethAmount = parseFloat(ethers.formatEther(ethReserves));
+          const thwAmount = parseFloat(ethers.formatUnits(thwReserves, 18));
+
+          // මිල ගණනය කිරීම: 1 THW = ? ETH
+          // ආරම්භයේදී liquidity නැතිනම් මිල 0 ලෙස පෙන්වීමට
+          let currentPrice = 0;
+          if (thwAmount > 0) {
+            currentPrice = ethAmount / thwAmount;
+          }
+
+          const newDataPoint = {
+            time: new Date().toLocaleTimeString(),
+            price: currentPrice.toFixed(6) // දශමස්ථාන 6කට පෙන්වමු
+          };
+
+          setChartData(prev => {
+            // මිල වෙනස් වුණේ නැත්නම් chart එක එකම මට්ටමේ පවත්වා ගැනීමට
+            return [...prev.slice(-19), newDataPoint]; // points 20ක් පෙන්වමු
+          });
+        } catch (err) {
+          console.error("Price fetch error:", err);
+        }
+      }
+    };
+
+    const interval = setInterval(fetchPrice, 3000); // තත්පර 3න් 3ට update වේ
+    return () => clearInterval(interval);
+  }, [poolContract]);
 
   const connectWallet = async () => {
     console.log("Connect wallet button clicked");
@@ -332,17 +250,10 @@ export default function OwnerDashboard() {
         console.log("Accounts received:", accounts);
         
         if (accounts && accounts.length > 0) {
-          // Use first account or let user select
+          // Use the first account or let user select
           const selectedAccount = accounts[0];
           
-          // Log connection activity
-          addActivity('connect', 'Wallet connected', {
-            account: selectedAccount,
-            network: 'Hardhat Localhost'
-          });
-          
-          setAccount(selectedAccount);
-          console.log("Wallet connected successfully");
+          // Check if connected to the correct network
           const chainId = await window.ethereum.request({ method: 'eth_chainId' });
           console.log("Current chainId:", chainId);
           
@@ -396,38 +307,21 @@ export default function OwnerDashboard() {
 
   const disconnectWallet = () => {
     console.log("Disconnecting wallet...");
-    
-    // Log disconnection activity
-    addActivity('disconnect', 'Wallet disconnected', {
-      previousAccount: account,
-      ethBalance: walletBalance.eth,
-      thwBalance: walletBalance.thw
-    });
-    
     setAccount(null);
     setWalletBalance({ eth: 0, thw: 0 });
+    // Keep pool data intact - don't reset these values
+    // setTotalTHW(0);
+    // setTotalETH(0);
+    // setCurrentPrice(0);
     setLiquidityAmount('');
     console.log("Wallet disconnected");
   };
 
   const handleLogout = () => {
-    console.log("🚪 Logging out from system...");
-    
-    // Log logout activity
-    addActivity('logout', 'User logged out from system', {
-      lastAccount: account
-    });
-    
-    // Clear user-specific state only (NOT pool data - that stays live via read-only contract)
-    setAccount(null);
-    setWalletBalance({ eth: 0, thw: 0 });
-    setLiquidityAmount('');
-    
-    // Note: We DON'T reset these because read-only contract keeps them updated:
-    // - totalETH, totalTHW, currentPrice, chartData
-    
-    // Navigate to login page (you can adjust this based on your routing)
-    window.location.href = "/";
+    // Disconnect wallet but keep pool data intact
+    disconnectWallet();
+    // Navigate to login page
+    navigate('/');
   };
 
   const handleAddLiquidity = async () => {
@@ -463,21 +357,10 @@ export default function OwnerDashboard() {
       });
 
       await addLiquidityTx.wait();
-      console.log("Liquidity added successfully!");
-
-      // Log activity
-      addActivity('add_liquidity', `Added ${liquidityAmount} THW + 0.1 ETH to pool`, {
-        thwAmount: liquidityAmount,
-        ethAmount: '0.1',
-        transactionHash: addLiquidityTx.hash
-      });
-
-      // Refresh data
-      await loadPoolData();
-      await loadWalletBalance();
-      
       alert("Liquidity added successfully!");
       setLiquidityAmount('');
+      loadPoolData();
+      loadWalletBalance();
     } catch (error) {
       console.error("Error adding liquidity:", error);
       alert("Failed to add liquidity: " + (error.message || "Unknown error"));
@@ -501,13 +384,6 @@ export default function OwnerDashboard() {
       const tx = await contractWithSigner.removeLiquidity();
       await tx.wait();
       
-      // Log activity
-      addActivity('remove_liquidity', 'Removed all liquidity from pool', {
-        transactionHash: tx.hash,
-        previousEth: totalETH,
-        previousThw: totalTHW
-      });
-      
       alert("Liquidity removed successfully!");
       loadPoolData();
       loadWalletBalance();
@@ -521,115 +397,104 @@ export default function OwnerDashboard() {
 
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif', backgroundColor: '#f5f5f5', minHeight: '100vh' }}>
+      {/* Logout Button - Left Side */}
+      <div style={{ position: 'fixed', left: '20px', top: '20px', zIndex: 1000 }}>
+        <button
+          onClick={handleLogout}
+          style={{
+            padding: '12px 20px',
+            backgroundColor: '#dc3545',
+            color: 'white',
+            border: 'none',
+            borderRadius: '8px',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            boxShadow: '0 2px 8px rgba(220, 53, 69, 0.3)',
+            transition: 'all 0.3s ease',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}
+          onMouseOver={(e) => {
+            e.target.style.backgroundColor = '#c82333';
+            e.target.style.transform = 'translateY(-2px)';
+          }}
+          onMouseOut={(e) => {
+            e.target.style.backgroundColor = '#dc3545';
+            e.target.style.transform = 'translateY(0)';
+          }}
+        >
+          🚪 Logout
+        </button>
+      </div>
+
       <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
         <h2 style={{ color: '#333', marginBottom: '20px' }}>Owner Dashboard</h2>
         
         {/* Wallet Connection */}
         <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
           <h3 style={{ color: '#555', marginBottom: '10px' }}>Wallet Connection</h3>
-          
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            {account ? (
-              <>
-                <div style={{ 
-                  backgroundColor: '#d4edda', 
-                  padding: '8px 12px', 
-                  borderRadius: '6px',
-                  fontSize: '14px',
-                  color: '#155724',
-                  fontFamily: 'monospace'
-                }}>
-                  Connected: {account.slice(0, 6)}...{account.slice(-4)}
-                </div>
-                
-                <button 
-                  onClick={disconnectWallet}
-                  style={{
-                    padding: '8px 16px',
-                    backgroundColor: '#ff8c00',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                    transition: 'background-color 0.2s'
-                  }}
-                  onMouseOver={(e) => e.target.style.backgroundColor = '#e07b00'}
-                  onMouseOut={(e) => e.target.style.backgroundColor = '#ff8c00'}
-                >
-                  🔌 Disconnect Wallet
-                </button>
-                
-                <button 
-                  onClick={handleLogout}
-                  style={{
-                    padding: '8px 16px',
-                    backgroundColor: '#dc3545',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                    transition: 'background-color 0.2s'
-                  }}
-                  onMouseOver={(e) => e.target.style.backgroundColor = '#c82333'}
-                  onMouseOut={(e) => e.target.style.backgroundColor = '#dc3545'}
-                >
-                  🚪 Logout System
-                </button>
-              </>
-            ) : (
+          {!account ? (
+            <button 
+              onClick={connectWallet}
+              disabled={loading}
+              style={{
+                padding: '10px 20px',
+                backgroundColor: loading ? '#6c757d' : '#007bff',
+                color: 'white',
+                border: 'none',
+                borderRadius: '5px',
+                cursor: loading ? 'not-allowed' : 'pointer',
+                fontSize: '16px'
+              }}
+            >
+              {loading ? 'Connecting...' : 'Connect Wallet'}
+            </button>
+          ) : (
+            <div>
+              <div style={{ color: '#28a745', marginBottom: '10px' }}>
+                <strong>Connected:</strong> {account.slice(0, 6)}...{account.slice(-4)}
+              </div>
               <button 
-                onClick={connectWallet}
-                disabled={loading}
+                onClick={disconnectWallet}
                 style={{
-                  padding: '10px 20px',
-                  backgroundColor: loading ? '#6c757d' : '#007bff',
+                  padding: '8px 16px',
+                  backgroundColor: '#dc3545',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '6px',
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  fontSize: '14px',
-                  transition: 'background-color 0.2s'
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  fontSize: '14px'
                 }}
-                onMouseOver={(e) => !loading && (e.target.style.backgroundColor = '#0056b3')}
-                onMouseOut={(e) => !loading && (e.target.style.backgroundColor = '#007bff')}
               >
-                {loading ? 'Connecting...' : '🔗 Connect MetaMask'}
+                Disconnect Wallet
               </button>
-            )}
-          </div>
-          
-          {!account && (
-            <div style={{ marginTop: '10px', fontSize: '12px', color: '#6c757d' }}>
-              💡 Pool data and price chart update live from blockchain (read-only mode)
             </div>
           )}
         </div>
 
-        {/* Total Wallet Balance - Only show when connected */}
-        {account && (
-          <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#cce5ff', borderRadius: '8px' }}>
-            <h3 style={{ color: '#004085', marginBottom: '15px' }}>Total Wallet Balance</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#17a2b8' }}>
-                  {parseFloat(walletBalance.eth || 0).toFixed(4)}
-                </div>
-                <div style={{ color: '#666' }}>ETH Balance</div>
+        {/* Total Wallet Balance */}
+        <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#cce5ff', borderRadius: '8px' }}>
+          <h3 style={{ color: '#004085', marginBottom: '15px' }}>Total Wallet Balance</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#17a2b8' }}>
+                {parseFloat(walletBalance.eth || 0).toFixed(4)}
               </div>
-              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fd7e14' }}>
-                  {parseFloat(walletBalance.thw || 0).toLocaleString()}
-                </div>
-                <div style={{ color: '#666' }}>THW Balance</div>
-              </div>
+              <div style={{ color: '#666' }}>ETH Balance</div>
             </div>
-            <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '14px', color: '#004085' }}>
-              <strong>Total Value:</strong> {(parseFloat(walletBalance.eth || 0) + (parseFloat(walletBalance.thw || 0) * parseFloat(currentPrice || 0))).toFixed(4)} ETH
+            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fd7e14' }}>
+                {parseFloat(walletBalance.thw || 0).toLocaleString()}
+              </div>
+              <div style={{ color: '#666' }}>THW Balance</div>
             </div>
           </div>
-        )}
+          <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '14px', color: '#004085' }}>
+            <strong>Total Value:</strong> {(parseFloat(walletBalance.eth || 0) + (parseFloat(walletBalance.thw || 0) * parseFloat(currentPrice || 0))).toFixed(4)} ETH
+          </div>
+        </div>
 
         {/* Total Liquidity Display */}
         <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#d4edda', borderRadius: '8px' }}>
@@ -732,6 +597,48 @@ export default function OwnerDashboard() {
               )}
             </div>
           )}
+        </div>
+
+        {/* Real-time THW/ETH Price Chart */}
+        <div className="bg-[#1a1a1a] p-6 rounded-2xl shadow-2xl mt-8 border border-gray-800">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-white text-xl font-semibold">THW / ETH Price Chart</h2>
+                <div className="text-[#00ff88] font-mono font-bold text-lg">
+                    {chartData.length > 0 ? chartData[chartData.length - 1].price : "0.000000"} ETH
+                </div>
+            </div>
+            
+            <div style={{ width: '100%', height: 350 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                        <XAxis 
+                            dataKey="time" 
+                            stroke="#888" 
+                            fontSize={12} 
+                            tickMargin={10}
+                        />
+                        <YAxis 
+                            domain={['auto', 'auto']} // මිල අනුව graph එක auto scale වේ
+                            stroke="#888" 
+                            fontSize={12} 
+                            tickFormatter={(val) => parseFloat(val).toFixed(4)}
+                        />
+                        <Tooltip 
+                            contentStyle={{ backgroundColor: '#222', border: 'none', borderRadius: '8px', color: '#fff' }}
+                            itemStyle={{ color: '#00ff88' }}
+                        />
+                        <Line 
+                            type="monotone" 
+                            dataKey="price" 
+                            stroke="#00ff88" 
+                            strokeWidth={3} 
+                            dot={false} // Points පෙන්වන්නේ නැතිව line එක විතරක්
+                            animationDuration={1000}
+                        />
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
         </div>
       </div>
     </div>
