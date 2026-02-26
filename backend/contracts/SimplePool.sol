@@ -41,6 +41,53 @@ contract SimplePool {
         totalTokensInPool = 0;
     }
 
+    // ETH යවලා THW ගන්න (Buy)
+    function swapETHForTHW() public payable {
+        require(msg.value > 0, "ETH required");
+        require(totalTokensInPool > 0, "No tokens in pool");
+
+        // Calculate THW amount to receive (with 0.3% fee)
+        uint256 ethAmount = msg.value;
+        uint256 fee = (ethAmount * 3) / 1000; // 0.3% fee
+        uint256 ethForSwap = ethAmount - fee;
+        
+        uint256 thwAmount = (ethForSwap * totalTokensInPool) / totalEthInPool;
+        
+        require(thwAmount > 0, "Insufficient liquidity");
+        require(thwAmount <= token.balanceOf(address(this)), "Not enough tokens");
+
+        // Update pool reserves
+        totalEthInPool += ethForSwap;
+        totalTokensInPool -= thwAmount;
+
+        // Transfer THW to user
+        token.transfer(msg.sender, thwAmount);
+    }
+
+    // THW යවලා ETH ගන්න (Sell)
+    function swapTHWForETH(uint256 _tokenAmount) public {
+        require(_tokenAmount > 0, "Tokens required");
+        require(totalTokensInPool > 0, "No tokens in pool");
+
+        // Calculate ETH amount to receive (with 0.3% fee)
+        uint256 ethAmount = (_tokenAmount * totalEthInPool) / totalTokensInPool;
+        uint256 fee = (ethAmount * 3) / 1000; // 0.3% fee
+        uint256 ethForUser = ethAmount - fee;
+        
+        require(ethForUser > 0, "Insufficient liquidity");
+        require(ethForUser <= address(this).balance, "Not enough ETH");
+
+        // Transfer THW from user to pool
+        token.transferFrom(msg.sender, address(this), _tokenAmount);
+
+        // Update pool reserves
+        totalTokensInPool += _tokenAmount;
+        totalEthInPool -= ethForUser;
+
+        // Transfer ETH to user
+        payable(msg.sender).transfer(ethForUser);
+    }
+
     // වර්තමාන මිල ලබා ගැනීම (ETH/THW)
     function getPrice() public view returns (uint256) {
         if (totalTokensInPool == 0) return 0;
