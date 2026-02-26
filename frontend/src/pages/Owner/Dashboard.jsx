@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import contractInfo from '../../contracts/contract-info.json';
 import SimplePoolABI from '../../contracts/SimplePool.json';
 
@@ -14,9 +13,6 @@ export default function OwnerDashboard() {
   const [poolContract, setPoolContract] = useState(null);
   const [loading, setLoading] = useState(false);
   const [contractOwner, setContractOwner] = useState(null);
-
-  // Real-time chart data state
-  const [chartData, setChartData] = useState([]);
 
   // Activity logging system
   const [activityLog, setActivityLog] = useState([]);
@@ -317,49 +313,13 @@ export default function OwnerDashboard() {
 
   // Update data when account or contract changes
   useEffect(() => {
-    if (account && poolContract) {
-      loadPoolData();
-      loadWalletBalance();
+    if (poolContract) {
+      loadPoolData(); // Load pool data even when disconnected (read-only)
+      if (account) {
+        loadWalletBalance(); // Load wallet balance only when connected
+      }
     }
   }, [account, poolContract]);
-
-  // Real-time price fetching for chart
-  useEffect(() => {
-    const fetchPrice = async () => {
-      if (poolContract) {
-        try {
-          // Pool එකේ තියෙන ETH සහ THW ප්‍රමාණයන් ලබා ගැනීම
-          const ethReserves = await poolContract.totalEthInPool();
-          const thwReserves = await poolContract.totalTokensInPool();
-
-          const ethAmount = parseFloat(ethers.formatEther(ethReserves));
-          const thwAmount = parseFloat(ethers.formatUnits(thwReserves, 18));
-
-          // මිල ගණනය කිරීම: 1 THW = ? ETH
-          // ආරම්භයේදී liquidity නැතිනම් මිල 0 ලෙස පෙන්වීමට
-          let currentPrice = 0;
-          if (thwAmount > 0) {
-            currentPrice = ethAmount / thwAmount;
-          }
-
-          const newDataPoint = {
-            time: new Date().toLocaleTimeString(),
-            price: currentPrice.toFixed(6) // දශමස්ථාන 6කට පෙන්වමු
-          };
-
-          setChartData(prev => {
-            // මිල වෙනස් වුණේ නැත්නම් chart එක එකම මට්ටමේ පවත්වා ගැනීමට
-            return [...prev.slice(-19), newDataPoint]; // points 20ක් පෙන්වමු
-          });
-        } catch (err) {
-          console.error("Price fetch error:", err);
-        }
-      }
-    };
-
-    const interval = setInterval(fetchPrice, 3000); // තත්පර 3න් 3ට update වේ
-    return () => clearInterval(interval);
-  }, [poolContract]);
 
   const connectWallet = async () => {
     console.log("Connect wallet button clicked");
@@ -446,11 +406,28 @@ export default function OwnerDashboard() {
     
     setAccount(null);
     setWalletBalance({ eth: 0, thw: 0 });
-    setTotalTHW(0);
-    setTotalETH(0);
-    setCurrentPrice(0);
     setLiquidityAmount('');
     console.log("Wallet disconnected");
+  };
+
+  const handleLogout = () => {
+    console.log("🚪 Logging out from system...");
+    
+    // Log logout activity
+    addActivity('logout', 'User logged out from system', {
+      lastAccount: account
+    });
+    
+    // Clear user-specific state only (NOT pool data - that stays live via read-only contract)
+    setAccount(null);
+    setWalletBalance({ eth: 0, thw: 0 });
+    setLiquidityAmount('');
+    
+    // Note: We DON'T reset these because read-only contract keeps them updated:
+    // - totalETH, totalTHW, currentPrice, chartData
+    
+    // Navigate to login page (you can adjust this based on your routing)
+    window.location.href = "/";
   };
 
   const handleAddLiquidity = async () => {
@@ -550,68 +527,109 @@ export default function OwnerDashboard() {
         {/* Wallet Connection */}
         <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
           <h3 style={{ color: '#555', marginBottom: '10px' }}>Wallet Connection</h3>
-          {!account ? (
-            <button 
-              onClick={connectWallet}
-              disabled={loading}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: loading ? '#6c757d' : '#007bff',
-                color: 'white',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                fontSize: '16px'
-              }}
-            >
-              {loading ? 'Connecting...' : 'Connect Wallet'}
-            </button>
-          ) : (
-            <div>
-              <div style={{ marginBottom: '10px' }}>
-                <strong>Connected Account:</strong> {account.slice(0, 6)}...{account.slice(-4)}
-              </div>
-              <div style={{ display: 'flex', gap: '10px' }}>
+          
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {account ? (
+              <>
+                <div style={{ 
+                  backgroundColor: '#d4edda', 
+                  padding: '8px 12px', 
+                  borderRadius: '6px',
+                  fontSize: '14px',
+                  color: '#155724',
+                  fontFamily: 'monospace'
+                }}>
+                  Connected: {account.slice(0, 6)}...{account.slice(-4)}
+                </div>
+                
                 <button 
                   onClick={disconnectWallet}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: '#ff8c00',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    transition: 'background-color 0.2s'
+                  }}
+                  onMouseOver={(e) => e.target.style.backgroundColor = '#e07b00'}
+                  onMouseOut={(e) => e.target.style.backgroundColor = '#ff8c00'}
+                >
+                  🔌 Disconnect Wallet
+                </button>
+                
+                <button 
+                  onClick={handleLogout}
                   style={{
                     padding: '8px 16px',
                     backgroundColor: '#dc3545',
                     color: 'white',
                     border: 'none',
-                    borderRadius: '5px',
+                    borderRadius: '6px',
                     cursor: 'pointer',
-                    fontSize: '14px'
+                    fontSize: '14px',
+                    transition: 'background-color 0.2s'
                   }}
+                  onMouseOver={(e) => e.target.style.backgroundColor = '#c82333'}
+                  onMouseOut={(e) => e.target.style.backgroundColor = '#dc3545'}
                 >
-                  🚪 Logout
+                  🚪 Logout System
                 </button>
-              </div>
+              </>
+            ) : (
+              <button 
+                onClick={connectWallet}
+                disabled={loading}
+                style={{
+                  padding: '10px 20px',
+                  backgroundColor: loading ? '#6c757d' : '#007bff',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  transition: 'background-color 0.2s'
+                }}
+                onMouseOver={(e) => !loading && (e.target.style.backgroundColor = '#0056b3')}
+                onMouseOut={(e) => !loading && (e.target.style.backgroundColor = '#007bff')}
+              >
+                {loading ? 'Connecting...' : '🔗 Connect MetaMask'}
+              </button>
+            )}
+          </div>
+          
+          {!account && (
+            <div style={{ marginTop: '10px', fontSize: '12px', color: '#6c757d' }}>
+              💡 Pool data and price chart update live from blockchain (read-only mode)
             </div>
           )}
         </div>
 
-        {/* Total Wallet Balance */}
-        <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#cce5ff', borderRadius: '8px' }}>
-          <h3 style={{ color: '#004085', marginBottom: '15px' }}>Total Wallet Balance</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#17a2b8' }}>
-                {parseFloat(walletBalance.eth || 0).toFixed(4)}
+        {/* Total Wallet Balance - Only show when connected */}
+        {account && (
+          <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#cce5ff', borderRadius: '8px' }}>
+            <h3 style={{ color: '#004085', marginBottom: '15px' }}>Total Wallet Balance</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
+                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#17a2b8' }}>
+                  {parseFloat(walletBalance.eth || 0).toFixed(4)}
+                </div>
+                <div style={{ color: '#666' }}>ETH Balance</div>
               </div>
-              <div style={{ color: '#666' }}>ETH Balance</div>
+              <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
+                <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fd7e14' }}>
+                  {parseFloat(walletBalance.thw || 0).toLocaleString()}
+                </div>
+                <div style={{ color: '#666' }}>THW Balance</div>
+              </div>
             </div>
-            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fd7e14' }}>
-                {parseFloat(walletBalance.thw || 0).toLocaleString()}
-              </div>
-              <div style={{ color: '#666' }}>THW Balance</div>
+            <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '14px', color: '#004085' }}>
+              <strong>Total Value:</strong> {(parseFloat(walletBalance.eth || 0) + (parseFloat(walletBalance.thw || 0) * parseFloat(currentPrice || 0))).toFixed(4)} ETH
             </div>
           </div>
-          <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '14px', color: '#004085' }}>
-            <strong>Total Value:</strong> {(parseFloat(walletBalance.eth || 0) + (parseFloat(walletBalance.thw || 0) * parseFloat(currentPrice || 0))).toFixed(4)} ETH
-          </div>
-        </div>
+        )}
 
         {/* Total Liquidity Display */}
         <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#d4edda', borderRadius: '8px' }}>
@@ -714,48 +732,6 @@ export default function OwnerDashboard() {
               )}
             </div>
           )}
-        </div>
-
-        {/* Real-time THW/ETH Price Chart */}
-        <div className="bg-[#1a1a1a] p-6 rounded-2xl shadow-2xl mt-8 border border-gray-800">
-            <div className="flex justify-between items-center mb-6">
-                <h2 className="text-white text-xl font-semibold">THW / ETH Price Chart</h2>
-                <div className="text-[#00ff88] font-mono font-bold text-lg">
-                    {chartData.length > 0 ? chartData[chartData.length - 1].price : "0.000000"} ETH
-                </div>
-            </div>
-            
-            <div style={{ width: '100%', height: 350 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
-                        <XAxis 
-                            dataKey="time" 
-                            stroke="#888" 
-                            fontSize={12} 
-                            tickMargin={10}
-                        />
-                        <YAxis 
-                            domain={['auto', 'auto']} // මිල අනුව graph එක auto scale වේ
-                            stroke="#888" 
-                            fontSize={12} 
-                            tickFormatter={(val) => parseFloat(val).toFixed(4)}
-                        />
-                        <Tooltip 
-                            contentStyle={{ backgroundColor: '#222', border: 'none', borderRadius: '8px', color: '#fff' }}
-                            itemStyle={{ color: '#00ff88' }}
-                        />
-                        <Line 
-                            type="monotone" 
-                            dataKey="price" 
-                            stroke="#00ff88" 
-                            strokeWidth={3} 
-                            dot={false} // Points පෙන්වන්නේ නැතිව line එක විතරක්
-                            animationDuration={1000}
-                        />
-                    </LineChart>
-                </ResponsiveContainer>
-            </div>
         </div>
       </div>
     </div>
