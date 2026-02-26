@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ethers } from 'ethers';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
@@ -188,6 +188,21 @@ export default function OwnerDashboard() {
       console.error("Error loading wallet balance:", error);
     }
   };
+
+  // Expected price calculation for preview
+  const expectedPrice = useMemo(() => {
+    const ethToAdd = parseFloat(addEth) || 0;
+    const thwToAdd = parseFloat(addThw) || 0;
+
+    // Add to current pool amounts
+    const totalNewEth = parseFloat(totalETH) + ethToAdd;
+    const totalNewThw = parseFloat(totalTHW) + thwToAdd;
+
+    if (totalNewThw > 0) {
+        return (totalNewEth / totalNewThw).toFixed(8);
+    }
+    return "0.00000000";
+  }, [addEth, addThw, totalETH, totalTHW]);
 
   // Load pool data - works even without account connection
   useEffect(() => {
@@ -619,7 +634,51 @@ export default function OwnerDashboard() {
               <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#2d3748', borderRadius: '6px' }}>
                 <h4 style={{ color: '#f7fafc', marginBottom: '15px', fontSize: '16px' }}>Add Liquidity (Price Control)</h4>
                 
-                {/* Current Price Example */}
+                {/* Price Preview Section */}
+                {(parseFloat(addEth) > 0 || parseFloat(addThw) > 0) && (
+                  <div style={{ marginBottom: '15px', padding: '12px', backgroundColor: '#1a202c', borderRadius: '4px', border: '1px solid #4a5568' }}>
+                    <div style={{ fontSize: '13px', color: '#e2e8f0', marginBottom: '8px' }}>
+                      <strong>💰 Price Preview (Before Adding)</strong>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                      <div>
+                        <p style={{ margin: '0', fontSize: '11px', color: '#a0aec0' }}>Current Price</p>
+                        <p style={{ margin: '0', fontSize: '14px', color: '#f7fafc', fontFamily: 'monospace' }}>
+                          {currentPrice || "0.000000"} ETH
+                        </p>
+                      </div>
+                      
+                      <div style={{ color: '#cbd5e0', fontSize: '18px' }}>→</div>
+                      
+                      <div style={{ textAlign: 'right' }}>
+                        <p style={{ margin: '0', fontSize: '11px', color: '#a0aec0' }}>Next Expected Price</p>
+                        <p style={{ 
+                          margin: '0', 
+                          fontSize: '16px', 
+                          fontFamily: 'monospace', 
+                          fontWeight: 'bold',
+                          color: parseFloat(expectedPrice) > parseFloat(currentPrice || 0) ? '#48bb78' : 
+                                 parseFloat(expectedPrice) < parseFloat(currentPrice || 0) ? '#f56565' : '#f7fafc'
+                        }}>
+                          {expectedPrice} ETH
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {/* Percentage Change */}
+                    <div style={{ marginTop: '8px', fontSize: '11px', textAlign: 'right' }}>
+                      {(parseFloat(addEth) > 0 || parseFloat(addThw) > 0) && (
+                        <span style={{ 
+                          color: parseFloat(expectedPrice) > parseFloat(currentPrice || 0) ? '#48bb78' : '#f56565' 
+                        }}>
+                          {currentPrice ? (((parseFloat(expectedPrice) - parseFloat(currentPrice)) / parseFloat(currentPrice)) * 100).toFixed(2) : "0.00"}% Change
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Current Pool Ratio */}
                 <div style={{ marginBottom: '15px', padding: '12px', backgroundColor: '#1a202c', borderRadius: '4px', border: '1px solid #4a5568' }}>
                   <div style={{ fontSize: '13px', color: '#e2e8f0', marginBottom: '8px' }}>
                     <strong>💰 Current Pool Ratio:</strong>
@@ -682,15 +741,17 @@ export default function OwnerDashboard() {
                 <div style={{ fontSize: '12px', color: '#e2e8f0', marginBottom: '15px', padding: '10px', backgroundColor: '#2d3748', borderRadius: '4px', border: '1px solid #4a5568' }}>
                   <p style={{ margin: '0 0 8px 0' }}>💡 <strong>Price Control Examples:</strong></p>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                    <div>
-                      <p style={{ margin: '0 0 3px 0', color: '#48bb78' }}>📈 <strong>To Pump Price:</strong></p>
-                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 1 ETH + 100 THW</p>
-                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 2 ETH + 500 THW</p>
+                    <div style={{ padding: '10px', backgroundColor: 'rgba(72, 187, 120, 0.1)', borderRadius: '4px', border: '1px solid #48bb78' }}>
+                      <p style={{ margin: '0 0 3px 0', color: '#48bb78', fontWeight: 'bold' }}>� TO PUMP PRICE</p>
+                      <p style={{ margin: '0', fontSize: '11px', color: '#68d391' }}>Add high ETH with low THW</p>
+                      <p style={{ margin: '3px 0 0 0', fontSize: '10px', color: '#9ae6b4' }}>• 1 ETH + 100 THW</p>
+                      <p style={{ margin: '0', fontSize: '10px', color: '#9ae6b4' }}>• 2 ETH + 500 THW</p>
                     </div>
-                    <div>
-                      <p style={{ margin: '0 0 3px 0', color: '#f56565' }}>📉 <strong>To Drop Price:</strong></p>
-                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 0.1 ETH + 1000 THW</p>
-                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 0.5 ETH + 2000 THW</p>
+                    <div style={{ padding: '10px', backgroundColor: 'rgba(245, 101, 101, 0.1)', borderRadius: '4px', border: '1px solid #f56565' }}>
+                      <p style={{ margin: '0 0 3px 0', color: '#f56565', fontWeight: 'bold' }}>📉 TO DROP PRICE</p>
+                      <p style={{ margin: '0', fontSize: '11px', color: '#fc8181' }}>Add low ETH with high THW</p>
+                      <p style={{ margin: '3px 0 0 0', fontSize: '10px', color: '#feb2b2' }}>• 0.1 ETH + 1000 THW</p>
+                      <p style={{ margin: '0', fontSize: '10px', color: '#feb2b2' }}>• 0.5 ETH + 2000 THW</p>
                     </div>
                   </div>
                   <p style={{ margin: '8px 0 3px 0', fontSize: '11px', color: '#a0aec0' }}>
