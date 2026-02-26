@@ -9,6 +9,8 @@ export default function OwnerDashboard() {
   const navigate = useNavigate();
   const [account, setAccount] = useState(null);
   const [liquidityAmount, setLiquidityAmount] = useState('');
+  const [addEth, setAddEth] = useState("");
+  const [addThw, setAddThw] = useState("");
   const [totalTHW, setTotalTHW] = useState(0);
   const [totalETH, setTotalETH] = useState(0);
   const [walletBalance, setWalletBalance] = useState({ eth: 0, thw: 0 });
@@ -369,6 +371,60 @@ export default function OwnerDashboard() {
     }
   };
 
+  // New dual input liquidity function
+  const handleAddLiquidityWithPrice = async () => {
+    if (!addEth || !addThw) {
+      alert("Please fill both inputs!");
+      return;
+    }
+
+    if (!poolContract || !account) {
+      alert("Please connect wallet first!");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const contractWithSigner = poolContract.connect(signer);
+
+      // ETH සහ THW අගයන් Blockchain එකට ගැළපෙන විදිහට (Wei) හරවමු
+      const ethInWei = ethers.parseEther(addEth);
+      const thwInWei = ethers.parseUnits(addThw, 18);
+
+      console.log(`Adding ${addEth} ETH and ${addThw} THW to pool...`);
+
+      // First, approve THW tokens
+      const tokenContract = new ethers.Contract(contractInfo.tokenAddress, [
+        "function approve(address spender, uint256 amount) returns (bool)"
+      ], signer);
+      
+      console.log("Approving THW tokens...");
+      const approveTx = await tokenContract.approve(contractInfo.poolAddress, thwInWei);
+      await approveTx.wait();
+      console.log("THW tokens approved");
+
+      // Contract එකේ function එක call කිරීම
+      const tx = await contractWithSigner.addLiquidity(thwInWei, { value: ethInWei });
+      
+      await tx.wait(); // Transaction එක confirm වන තෙක් ඉමු
+      
+      alert("Liquidity Added Successfully! Price updated.");
+      setAddEth(""); // Inputs clear කරමු
+      setAddThw("");
+
+      // වැදගත්ම දේ: Transaction එක ඉවර වුණ ගමන් අලුත් මිල Chart එකට ගන්න
+      loadPoolData(); 
+
+    } catch (err) {
+      console.error("Liquidity Error:", err);
+      alert("Transaction Failed: " + (err.message || "Unknown error"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRemoveLiquidity = async () => {
     if (!poolContract || !account) {
       alert("Please connect wallet");
@@ -524,7 +580,7 @@ export default function OwnerDashboard() {
               {/* Add Liquidity Section */}
               <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: 'white', borderRadius: '6px' }}>
                 <h4 style={{ color: '#28a745', marginBottom: '10px' }}>✅ Welcome Owner! You can manage liquidity here.</h4>
-                <h4 style={{ color: '#495057', marginBottom: '10px', fontSize: '16px' }}>Add Liquidity</h4>
+                <h4 style={{ color: '#495057', marginBottom: '10px', fontSize: '16px' }}>Add Liquidity (Fixed 0.1 ETH)</h4>
                 <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
                   <input
                     type="number"
@@ -559,11 +615,116 @@ export default function OwnerDashboard() {
                 </div>
               </div>
 
+              {/* Dual Input Liquidity Section */}
+              <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#2d3748', borderRadius: '6px' }}>
+                <h4 style={{ color: '#f7fafc', marginBottom: '15px', fontSize: '16px' }}>Add Liquidity (Price Control)</h4>
+                
+                {/* Current Price Example */}
+                <div style={{ marginBottom: '15px', padding: '12px', backgroundColor: '#1a202c', borderRadius: '4px', border: '1px solid #4a5568' }}>
+                  <div style={{ fontSize: '13px', color: '#e2e8f0', marginBottom: '8px' }}>
+                    <strong>💰 Current Pool Ratio:</strong>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
+                    <div style={{ color: '#cbd5e0' }}>
+                      <strong>ETH:</strong> {parseFloat(totalETH || 0).toFixed(4)} ETH
+                    </div>
+                    <div style={{ color: '#cbd5e0' }}>
+                      <strong>THW:</strong> {parseFloat(totalTHW || 0).toLocaleString()} THW
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#f6e05e' }}>
+                    <strong>Current Price:</strong> 1 THW = {currentPrice || "0.000000"} ETH
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e0', marginBottom: '5px' }}>Amount of ETH</label>
+                    <input 
+                      type="number" 
+                      value={addEth}
+                      onChange={(e) => setAddEth(e.target.value)}
+                      placeholder="0.0 ETH"
+                      disabled={loading}
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #4a5568',
+                        borderRadius: '4px',
+                        backgroundColor: '#1a202c',
+                        color: '#f7fafc',
+                        fontSize: '14px'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e0', marginBottom: '5px' }}>Amount of THW</label>
+                    <input 
+                      type="number" 
+                      value={addThw}
+                      onChange={(e) => setAddThw(e.target.value)}
+                      placeholder="0 THW"
+                      disabled={loading}
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        border: '1px solid #4a5568',
+                        borderRadius: '4px',
+                        backgroundColor: '#1a202c',
+                        color: '#f7fafc',
+                        fontSize: '14px'
+                      }}
+                    />
+                  </div>
+                </div>
+                
+                {/* Price Control Examples */}
+                <div style={{ fontSize: '12px', color: '#e2e8f0', marginBottom: '15px', padding: '10px', backgroundColor: '#2d3748', borderRadius: '4px', border: '1px solid #4a5568' }}>
+                  <p style={{ margin: '0 0 8px 0' }}>💡 <strong>Price Control Examples:</strong></p>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <p style={{ margin: '0 0 3px 0', color: '#48bb78' }}>📈 <strong>To Pump Price:</strong></p>
+                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 1 ETH + 100 THW</p>
+                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 2 ETH + 500 THW</p>
+                    </div>
+                    <div>
+                      <p style={{ margin: '0 0 3px 0', color: '#f56565' }}>📉 <strong>To Drop Price:</strong></p>
+                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 0.1 ETH + 1000 THW</p>
+                      <p style={{ margin: '0', fontSize: '11px' }}>• Add 0.5 ETH + 2000 THW</p>
+                    </div>
+                  </div>
+                  <p style={{ margin: '8px 0 3px 0', fontSize: '11px', color: '#a0aec0' }}>
+                    <strong>Formula:</strong> New Price = Total ETH ÷ Total THW
+                  </p>
+                  <p style={{ margin: '0', fontSize: '11px', color: '#a0aec0' }}>
+                    <strong>Current Ratio:</strong> 1 ETH = {currentPrice ? (1/parseFloat(currentPrice)).toFixed(2) : "0.00"} THW
+                  </p>
+                </div>
+
+                <button 
+                  onClick={handleAddLiquidityWithPrice}
+                  disabled={loading || !account}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    backgroundColor: loading || !account ? '#4a5568' : '#f6e05e',
+                    color: '#1a202c',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: loading || !account ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  {loading ? 'Processing...' : 'Add Liquidity & Update Price'}
+                </button>
+              </div>
+
               {/* Remove Liquidity Section */}
-              <div style={{ padding: '15px', backgroundColor: '#fff3cd', borderRadius: '6px' }}>
-                <h4 style={{ color: '#856404', marginBottom: '10px', fontSize: '16px' }}>Remove All Liquidity (Owner Only)</h4>
+              <div style={{ padding: '15px', backgroundColor: '#f8d7da', borderRadius: '6px' }}>
+                <h4 style={{ color: '#721c24', marginBottom: '10px', fontSize: '16px' }}>Remove All Liquidity (Owner Only)</h4>
                 <div style={{ marginBottom: '10px' }}>
-                  <strong style={{ color: '#856404' }}>⚠️ Warning:</strong> This will remove all liquidity from the pool and send it back to the owner's wallet.
+                  <strong style={{ color: '#721c24' }}>⚠️ Warning:</strong> This will remove all liquidity from the pool and send it back to the owner's wallet.
                 </div>
                 <button
                   onClick={handleRemoveLiquidity}
@@ -578,7 +739,7 @@ export default function OwnerDashboard() {
                     fontSize: '14px'
                   }}
                 >
-                  {loading ? 'Processing...' : 'Add'}
+                  {loading ? 'Processing...' : 'Remove All Liquidity'}
                 </button>
               </div>
             </>
