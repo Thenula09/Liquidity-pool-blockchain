@@ -15,6 +15,50 @@ export default function OwnerDashboard() {
   const [loading, setLoading] = useState(false);
   const [contractOwner, setContractOwner] = useState(null);
 
+  // Real-time chart data state
+  const [chartData, setChartData] = useState([]);
+
+  // Activity logging system
+  const [activityLog, setActivityLog] = useState([]);
+
+  // Add activity to log
+  const addActivity = (type, description, data = {}) => {
+    const newActivity = {
+      id: Date.now(),
+      timestamp: new Date().toLocaleString(),
+      type: type, // 'connect', 'disconnect', 'add_liquidity', 'remove_liquidity'
+      description: description,
+      account: account,
+      data: data
+    };
+    
+    setActivityLog(prev => [newActivity, ...prev].slice(0, 50)); // Keep last 50 activities
+    console.log(`📝 Activity Logged:`, newActivity);
+  };
+
+  // Update contract with read-only provider
+  const updateContract = async () => {
+    let provider;
+    if (window.ethereum && account) {
+      // Wallet connected - use Web3Provider with signer (Write access)
+      provider = new ethers.BrowserProvider(window.ethereum);
+    } else {
+      // Wallet disconnected - use JsonRpcProvider (Read access)
+      provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+    }
+    
+    if (contractInfo.poolAddress && SimplePoolABI.abi) {
+      const poolContract = new ethers.Contract(contractInfo.poolAddress, SimplePoolABI.abi, provider);
+      setPoolContract(poolContract);
+      console.log("Contract updated with provider:", account ? "Web3Provider (Signer)" : "JsonRpcProvider (Read-only)");
+    }
+  };
+
+  // Update contract when account changes
+  useEffect(() => {
+    updateContract();
+  }, [account]);
+
   // Contract owner address
   const CONTRACT_OWNER_ADDRESS = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
   
@@ -25,21 +69,94 @@ export default function OwnerDashboard() {
   console.log("Current Account:", account);
   console.log("Is Owner?:", isOwner);
 
-  // Sample price data for the chart - 5 minute intervals
-  const [priceData, setPriceData] = useState([
-    { time: '00:00', price: 0.0020 },
-    { time: '00:05', price: 0.0021 },
-    { time: '00:10', price: 0.0019 },
-    { time: '00:15', price: 0.0022 },
-    { time: '00:20', price: 0.0023 },
-    { time: '00:25', price: 0.0021 },
-    { time: '00:30', price: 0.0020 },
-    { time: '00:35', price: 0.0022 },
-    { time: '00:40', price: 0.0024 },
-    { time: '00:45', price: 0.0021 },
-    { time: '00:50', price: 0.0020 },
-    { time: '00:55', price: 0.0023 },
-  ]);
+  // Pool liquidity display
+  const PoolLiquidityDisplay = () => (
+    <div style={{ 
+      padding: '15px', 
+      backgroundColor: '#e8f4fd', 
+      borderRadius: '8px', 
+      marginBottom: '20px',
+      border: '1px solid #bee5eb'
+    }}>
+      <h4 style={{ color: '#0c5460', marginBottom: '10px', fontSize: '16px' }}>
+        💧 Current Pool Liquidity
+      </h4>
+      <div style={{ display: 'flex', gap: '20px', justifyContent: 'space-between' }}>
+        <div>
+          <div style={{ color: '#6c757d', fontSize: '12px' }}>ETH in Pool</div>
+          <div style={{ color: '#0c5460', fontSize: '18px', fontWeight: 'bold' }}>
+            {parseFloat(totalETH || 0).toFixed(4)} ETH
+          </div>
+        </div>
+        <div>
+          <div style={{ color: '#6c757d', fontSize: '12px' }}>THW in Pool</div>
+          <div style={{ color: '#0c5460', fontSize: '18px', fontWeight: 'bold' }}>
+            {parseFloat(totalTHW || 0).toFixed(2)} THW
+          </div>
+        </div>
+        <div>
+          <div style={{ color: '#6c757d', fontSize: '12px' }}>Current Price</div>
+          <div style={{ color: '#0c5460', fontSize: '18px', fontWeight: 'bold' }}>
+            1 THW = {parseFloat(currentPrice || 0).toFixed(6)} ETH
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Activity log display
+  const ActivityLogDisplay = () => (
+    <div style={{ 
+      padding: '15px', 
+      backgroundColor: '#fff3cd', 
+      borderRadius: '8px', 
+      marginBottom: '20px',
+      border: '1px solid #ffeaa7',
+      maxHeight: '300px',
+      overflow: 'auto'
+    }}>
+      <h4 style={{ color: '#856404', marginBottom: '10px', fontSize: '16px' }}>
+        📝 Activity Log
+      </h4>
+      {activityLog.length === 0 ? (
+        <div style={{ color: '#6c757d', fontSize: '14px' }}>
+          No activities yet. Connect your wallet to start.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {activityLog.map((activity) => (
+            <div 
+              key={activity.id}
+              style={{ 
+                padding: '8px', 
+                backgroundColor: '#fff', 
+                borderRadius: '4px',
+                border: '1px solid #dee2e6',
+                fontSize: '12px'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                <span style={{ fontWeight: 'bold', color: '#495057' }}>
+                  {activity.type.toUpperCase()}
+                </span>
+                <span style={{ color: '#6c757d' }}>
+                  {activity.timestamp}
+                </span>
+              </div>
+              <div style={{ color: '#495057' }}>
+                {activity.description}
+              </div>
+              {activity.account && (
+                <div style={{ color: '#6c757d', fontSize: '11px' }}>
+                  Account: {activity.account.slice(0, 6)}...{activity.account.slice(-4)}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 
   // Load contract owner
   const loadContractOwner = useCallback(async () => {
@@ -206,6 +323,44 @@ export default function OwnerDashboard() {
     }
   }, [account, poolContract]);
 
+  // Real-time price fetching for chart
+  useEffect(() => {
+    const fetchPrice = async () => {
+      if (poolContract) {
+        try {
+          // Pool එකේ තියෙන ETH සහ THW ප්‍රමාණයන් ලබා ගැනීම
+          const ethReserves = await poolContract.totalEthInPool();
+          const thwReserves = await poolContract.totalTokensInPool();
+
+          const ethAmount = parseFloat(ethers.formatEther(ethReserves));
+          const thwAmount = parseFloat(ethers.formatUnits(thwReserves, 18));
+
+          // මිල ගණනය කිරීම: 1 THW = ? ETH
+          // ආරම්භයේදී liquidity නැතිනම් මිල 0 ලෙස පෙන්වීමට
+          let currentPrice = 0;
+          if (thwAmount > 0) {
+            currentPrice = ethAmount / thwAmount;
+          }
+
+          const newDataPoint = {
+            time: new Date().toLocaleTimeString(),
+            price: currentPrice.toFixed(6) // දශමස්ථාන 6කට පෙන්වමු
+          };
+
+          setChartData(prev => {
+            // මිල වෙනස් වුණේ නැත්නම් chart එක එකම මට්ටමේ පවත්වා ගැනීමට
+            return [...prev.slice(-19), newDataPoint]; // points 20ක් පෙන්වමු
+          });
+        } catch (err) {
+          console.error("Price fetch error:", err);
+        }
+      }
+    };
+
+    const interval = setInterval(fetchPrice, 3000); // තත්පර 3න් 3ට update වේ
+    return () => clearInterval(interval);
+  }, [poolContract]);
+
   const connectWallet = async () => {
     console.log("Connect wallet button clicked");
     try {
@@ -217,10 +372,17 @@ export default function OwnerDashboard() {
         console.log("Accounts received:", accounts);
         
         if (accounts && accounts.length > 0) {
-          // Use the first account or let user select
+          // Use first account or let user select
           const selectedAccount = accounts[0];
           
-          // Check if connected to the correct network
+          // Log connection activity
+          addActivity('connect', 'Wallet connected', {
+            account: selectedAccount,
+            network: 'Hardhat Localhost'
+          });
+          
+          setAccount(selectedAccount);
+          console.log("Wallet connected successfully");
           const chainId = await window.ethereum.request({ method: 'eth_chainId' });
           console.log("Current chainId:", chainId);
           
@@ -274,6 +436,14 @@ export default function OwnerDashboard() {
 
   const disconnectWallet = () => {
     console.log("Disconnecting wallet...");
+    
+    // Log disconnection activity
+    addActivity('disconnect', 'Wallet disconnected', {
+      previousAccount: account,
+      ethBalance: walletBalance.eth,
+      thwBalance: walletBalance.thw
+    });
+    
     setAccount(null);
     setWalletBalance({ eth: 0, thw: 0 });
     setTotalTHW(0);
@@ -316,10 +486,21 @@ export default function OwnerDashboard() {
       });
 
       await addLiquidityTx.wait();
+      console.log("Liquidity added successfully!");
+
+      // Log activity
+      addActivity('add_liquidity', `Added ${liquidityAmount} THW + 0.1 ETH to pool`, {
+        thwAmount: liquidityAmount,
+        ethAmount: '0.1',
+        transactionHash: addLiquidityTx.hash
+      });
+
+      // Refresh data
+      await loadPoolData();
+      await loadWalletBalance();
+      
       alert("Liquidity added successfully!");
       setLiquidityAmount('');
-      loadPoolData();
-      loadWalletBalance();
     } catch (error) {
       console.error("Error adding liquidity:", error);
       alert("Failed to add liquidity: " + (error.message || "Unknown error"));
@@ -342,6 +523,13 @@ export default function OwnerDashboard() {
       
       const tx = await contractWithSigner.removeLiquidity();
       await tx.wait();
+      
+      // Log activity
+      addActivity('remove_liquidity', 'Removed all liquidity from pool', {
+        transactionHash: tx.hash,
+        previousEth: totalETH,
+        previousThw: totalTHW
+      });
       
       alert("Liquidity removed successfully!");
       loadPoolData();
@@ -380,23 +568,25 @@ export default function OwnerDashboard() {
             </button>
           ) : (
             <div>
-              <div style={{ color: '#28a745', marginBottom: '10px' }}>
-                <strong>Connected:</strong> {account.slice(0, 6)}...{account.slice(-4)}
+              <div style={{ marginBottom: '10px' }}>
+                <strong>Connected Account:</strong> {account.slice(0, 6)}...{account.slice(-4)}
               </div>
-              <button 
-                onClick={disconnectWallet}
-                style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#dc3545',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '5px',
-                  cursor: 'pointer',
-                  fontSize: '14px'
-                }}
-              >
-                Disconnect Wallet
-              </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button 
+                  onClick={disconnectWallet}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: '#dc3545',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                >
+                  🚪 Logout
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -508,10 +698,7 @@ export default function OwnerDashboard() {
                   {loading ? 'Processing...' : 'Add'}
                 </button>
               </div>
-              <div style={{ fontSize: '12px', color: '#666' }}>
-                Add THW tokens + 0.1 ETH to the pool
-              </div>
-            </div>
+            </>
           ) : (
             <div style={{ padding: '15px', backgroundColor: '#f8d7da', borderRadius: '6px', border: '1px solid #f5c6cb' }}>
               <h4 style={{ color: '#721c24', margin: '0 0 10px 0', fontSize: '16px' }}>
@@ -529,25 +716,46 @@ export default function OwnerDashboard() {
           )}
         </div>
 
-        {/* Price Chart */}
-        <div style={{ padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
-          <h3 style={{ color: '#495057', marginBottom: '15px' }}>THW Price Chart (5 Minute Intervals)</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={priceData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="time" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Line 
-                type="monotone" 
-                dataKey="price" 
-                stroke="#007bff" 
-                strokeWidth={2}
-                name="THW Price (ETH)"
-              />
-            </LineChart>
-          </ResponsiveContainer>
+        {/* Real-time THW/ETH Price Chart */}
+        <div className="bg-[#1a1a1a] p-6 rounded-2xl shadow-2xl mt-8 border border-gray-800">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-white text-xl font-semibold">THW / ETH Price Chart</h2>
+                <div className="text-[#00ff88] font-mono font-bold text-lg">
+                    {chartData.length > 0 ? chartData[chartData.length - 1].price : "0.000000"} ETH
+                </div>
+            </div>
+            
+            <div style={{ width: '100%', height: 350 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+                        <XAxis 
+                            dataKey="time" 
+                            stroke="#888" 
+                            fontSize={12} 
+                            tickMargin={10}
+                        />
+                        <YAxis 
+                            domain={['auto', 'auto']} // මිල අනුව graph එක auto scale වේ
+                            stroke="#888" 
+                            fontSize={12} 
+                            tickFormatter={(val) => parseFloat(val).toFixed(4)}
+                        />
+                        <Tooltip 
+                            contentStyle={{ backgroundColor: '#222', border: 'none', borderRadius: '8px', color: '#fff' }}
+                            itemStyle={{ color: '#00ff88' }}
+                        />
+                        <Line 
+                            type="monotone" 
+                            dataKey="price" 
+                            stroke="#00ff88" 
+                            strokeWidth={3} 
+                            dot={false} // Points පෙන්වන්නේ නැතිව line එක විතරක්
+                            animationDuration={1000}
+                        />
+                    </LineChart>
+                </ResponsiveContainer>
+            </div>
         </div>
       </div>
     </div>
