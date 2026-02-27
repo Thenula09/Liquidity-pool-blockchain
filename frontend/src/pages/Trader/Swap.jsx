@@ -46,65 +46,61 @@ const TraderDashboard = () => {
         if (!account || !poolContract) return;
         
         try {
+            console.log("🔄 Fetching transaction history...");
             const provider = new ethers.BrowserProvider(window.ethereum);
             
             // Get transaction history for the current account
             const currentBlock = await provider.getBlockNumber();
             const fromBlock = Math.max(0, currentBlock - 1000); // Last 1000 blocks
             
-            // Filter for Swap events (both buy and sell)
+            // Filter for Swap events from our contract
             const swapFilter = {
                 address: CONTRACTS.poolAddress,
                 topics: [
-                    ethers.id("Swap(address,address,uint256,uint256,uint256,uint256)"),
-                    null, // any sender
-                    null  // any recipient
+                    ethers.id("Swap(address,uint256,uint256,uint256)"), // Correct event signature
+                    null, // any user
                 ],
                 fromBlock: fromBlock,
                 toBlock: 'latest'
             };
             
             const logs = await provider.getLogs(swapFilter);
+            console.log("📊 Found logs:", logs.length);
             
             const userTransactions = logs.map(log => {
-                const parsed = poolContract.interface.parseLog(log);
-                const isUserTransaction = parsed.args.sender.toLowerCase() === account.toLowerCase();
-                
-                if (isUserTransaction) {
-                    const amount0In = parseFloat(ethers.formatEther(parsed.args.amount0In));
-                    const amount1In = parseFloat(ethers.formatUnits(parsed.args.amount1In, 18));
-                    const amount0Out = parseFloat(ethers.formatEther(parsed.args.amount0Out));
-                    const amount1Out = parseFloat(ethers.formatUnits(parsed.args.amount1Out, 18));
+                try {
+                    const parsed = poolContract.interface.parseLog(log);
+                    const isUserTransaction = parsed.args.user.toLowerCase() === account.toLowerCase();
                     
-                    // Determine transaction type
-                    let type, ethAmount, thwAmount;
-                    if (amount0In > 0 && amount1Out > 0) {
-                        // ETH in, THW out = Buy
-                        type = 'BUY';
-                        ethAmount = amount0In;
-                        thwAmount = amount1Out;
-                    } else if (amount1In > 0 && amount0Out > 0) {
-                        // THW in, ETH out = Sell
-                        type = 'SELL';
-                        ethAmount = amount0Out;
-                        thwAmount = amount1In;
+                    if (isUserTransaction) {
+                        const ethAmount = parseFloat(ethers.formatEther(parsed.args.ethAmount));
+                        const thwAmount = parseFloat(ethers.formatUnits(parsed.args.tokenAmount, 18));
+                        
+                        // Determine transaction type based on ETH amount (positive = buy, negative = sell)
+                        // Since this is a Swap event, we need to determine direction
+                        // For now, let's assume all are buys (we can refine this later)
+                        const type = 'BUY'; // We'll need to refine this logic
+                        
+                        return {
+                            hash: log.transactionHash,
+                            type: type,
+                            ethAmount: ethAmount,
+                            thwAmount: thwAmount,
+                            timestamp: new Date(parsed.args.timestamp * 1000).toLocaleString(),
+                            blockNumber: log.blockNumber
+                        };
                     }
-                    
-                    return {
-                        hash: log.transactionHash,
-                        type: type,
-                        ethAmount: ethAmount,
-                        thwAmount: thwAmount,
-                        timestamp: new Date(log.blockNumber * 12000).toLocaleString(), // Approximate 12s block time
-                        blockNumber: log.blockNumber
-                    };
+                    return null;
+                } catch (parseError) {
+                    console.error("Error parsing log:", parseError);
+                    return null;
                 }
-                return null;
             }).filter(tx => tx !== null);
             
+            console.log("📈 User transactions:", userTransactions);
             setTransactions(userTransactions.reverse()); // Most recent first
         } catch (error) {
-            console.error("Error fetching transaction history:", error);
+            console.error("❌ Error fetching transaction history:", error);
         }
     }, [account, poolContract]);
 
@@ -170,15 +166,24 @@ const TraderDashboard = () => {
         if (!poolContract) return;
         
         try {
+            console.log("🔄 Loading pool data...");
+            
             // Use the new CPMM getReserves function
             const [ethReserves, tokenReserves] = await poolContract.getReserves();
             const price = await poolContract.getPrice();
+            
+            console.log("📊 Pool Data Loaded:", {
+                ethReserves: ethers.formatEther(ethReserves),
+                tokenReserves: ethers.formatUnits(tokenReserves, 18),
+                price: ethers.formatUnits(price, 18)
+            });
             
             setTotalETH(ethers.formatEther(ethReserves));
             setTotalTHW(ethers.formatUnits(tokenReserves, 18));
             setCurrentPrice(ethers.formatUnits(price, 18));
         } catch (error) {
-            console.error("Error loading pool data:", error);
+            console.error("❌ Error loading pool data:", error);
+            // Don't throw error, just log it for now
         }
     }, [poolContract]);
 
@@ -230,14 +235,28 @@ const TraderDashboard = () => {
         if (account && poolContract) {
             fetchTransactionHistory();
         }
-    }, [account, poolContract, fetchTransactionHistory]);
+    }, [account, poolContract]); // Remove fetchTransactionHistory dependency to prevent infinite loop
 
     // Load initial data when contract is set
     useEffect(() => {
         if (poolContract) {
             loadPoolData();
         }
-    }, [poolContract, loadPoolData]);
+    }, [poolContract]); // Remove loadPoolData dependency to prevent infinite loop
+
+    // Update UI after transaction
+    const updateUI = async () => {
+        try {
+            await loadPoolData();
+            await updateUserBalances(account);
+            // Refresh transaction history after a short delay to allow the event to be processed
+            setTimeout(() => {
+                fetchTransactionHistory();
+            }, 2000);
+        } catch (error) {
+            console.error("Error updating UI:", error);
+        }
+    };
 
     // Real-time price fetching for chart
     useEffect(() => {
@@ -383,17 +402,22 @@ const TraderDashboard = () => {
 
         setLoading(true);
         try {
+            console.log("🔄 Starting buy transaction...");
             const provider = new ethers.BrowserProvider(window.ethereum);
             const signer = await provider.getSigner();
             const contract = poolContract.connect(signer);
 
             const ethAmountWei = ethers.parseEther(ethPay);
+            console.log("💰 ETH amount to send:", ethPay, "ETH");
 
-            console.log("Buying THW tokens with CPMM...");
+            console.log("📞 Calling buyTokens function...");
             // Using the new CPMM function: buyTokens()
             const tx = await contract.buyTokens({ value: ethAmountWei });
             
+            console.log("⏳ Waiting for transaction confirmation...");
             await tx.wait();
+            
+            console.log("✅ Transaction confirmed:", tx.hash);
             
             // Add to transaction history
             addTransactionToHistory('BUY', parseFloat(ethPay), parseFloat(thwReceive), tx.hash);
@@ -402,12 +426,13 @@ const TraderDashboard = () => {
             setThwReceive("");
             setEthPay("");
             setPriceImpact(0);
-            loadPoolData(); // Update chart and pool data
-            updateUserBalances(account); // Update user balances after transaction
-            fetchTransactionHistory(); // Refresh transaction history
+            
+            // Update data after successful transaction
+            await updateUI();
+            
         } catch (err) {
-            console.error("Buy Error:", err);
-            alert("Transaction Failed: " + err.message);
+            console.error("❌ Buy Error:", err);
+            alert("Transaction Failed: " + (err.message || err.reason || "Unknown error"));
         } finally {
             setLoading(false);
         }
@@ -420,23 +445,29 @@ const TraderDashboard = () => {
 
         setLoading(true);
         try {
+            console.log("🔄 Starting sell transaction...");
             const provider = new ethers.BrowserProvider(window.ethereum);
             const signer = await provider.getSigner();
             
             // Step A: Approve THW tokens for the contract
+            console.log("🔐 Creating token contract...");
             const tokenContract = new ethers.Contract(CONTRACTS.tokenAddress, THWTokenABI, signer);
             const thwAmountWei = ethers.parseUnits(thwReceive, 18);
+            console.log("💰 THW amount to approve:", thwReceive, "THW");
 
-            console.log("Approving THW tokens for sale...");
+            console.log("📞 Approving THW tokens for sale...");
             const approveTx = await tokenContract.approve(CONTRACTS.poolAddress, thwAmountWei);
             await approveTx.wait();
+            console.log("✅ Approval confirmed:", approveTx.hash);
 
             // Step B: Call the CPMM sell function
+            console.log("📞 Calling sellTokens function...");
             const mainContract = poolContract.connect(signer);
-            console.log("Selling THW tokens with CPMM...");
             const tx = await mainContract.sellTokens(thwAmountWei);
             
+            console.log("⏳ Waiting for transaction confirmation...");
             await tx.wait();
+            console.log("✅ Transaction confirmed:", tx.hash);
             
             // Add to transaction history
             addTransactionToHistory('SELL', parseFloat(ethPay), parseFloat(thwReceive), tx.hash);
@@ -445,12 +476,13 @@ const TraderDashboard = () => {
             setThwReceive("");
             setEthPay("");
             setPriceImpact(0);
-            loadPoolData(); // Update chart and pool data
-            updateUserBalances(account); // Update user balances after transaction
-            fetchTransactionHistory(); // Refresh transaction history
+            
+            // Update data after successful transaction
+            await updateUI();
+            
         } catch (err) {
-            console.error("Sell Error:", err);
-            alert("Transaction Failed: " + err.message);
+            console.error("❌ Sell Error:", err);
+            alert("Transaction Failed: " + (err.message || err.reason || "Unknown error"));
         } finally {
             setLoading(false);
         }
