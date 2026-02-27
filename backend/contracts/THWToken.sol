@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract THWToken is ERC20 {
     constructor() ERC20("THW Token", "THW") {
         console.log("THW Token Constructor: Deploying THW Token...");
-        // මුලින්ම ටෝකන් මිලියනයක් (1,000,000) හදලා ඔයාගේ wallet එකට දෙනවා
+        // Initially create one million tokens and send to deployer wallet
         uint256 initialSupply = 1000000 * 10 ** decimals();
         _mint(msg.sender, initialSupply);
         console.log("THW Token deployed successfully!");

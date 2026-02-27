@@ -192,12 +192,12 @@ const TraderDashboard = () => {
         const initContract = async () => {
             if (typeof window !== 'undefined' && window.ethereum) {
                 try {
-                    console.log("🚀 Step 2: Contract එක සකස් කිරීම ආරම්භ කළා...");
+                    console.log("🚀 Step 2: Starting contract setup...");
                     
                     const provider = new ethers.BrowserProvider(window.ethereum);
                     console.log("✅ Step 2a: Provider created successfully");
                     
-                    // ABI එක හරියට තියෙනවද බලමු
+                    // Check if ABI is correct
                     console.log("📊 Step 2b: SimplePool ABI Data Check:", {
                         type: typeof SimplePoolABI,
                         isArray: Array.isArray(SimplePoolABI),
@@ -206,7 +206,7 @@ const TraderDashboard = () => {
                     });
                     
                     if (!SimplePoolABI || !Array.isArray(SimplePoolABI)) {
-                        console.error("❌ Step 2c: SimplePool ABI එක Array එකක් නෙවෙයි! (Check your import)");
+                        console.error("❌ Step 2c: SimplePool ABI is not an Array! (Check your import)");
                         return;
                     }
                     
@@ -269,7 +269,7 @@ const TraderDashboard = () => {
                     const ethAmount = parseFloat(ethers.formatEther(ethReserves));
                     const thwAmount = parseFloat(ethers.formatUnits(tokenReserves, 18));
 
-                    // මිල ගණනය කිරීම: 1 THW = ? ETH
+                    // Calculate price: 1 THW = ? ETH
                     let currentPrice = 0;
                     if (thwAmount > 0) {
                         currentPrice = ethAmount / thwAmount;
@@ -355,12 +355,12 @@ const TraderDashboard = () => {
     const connectWallet = async () => {
         try {
             if (typeof window !== 'undefined' && window.ethereum) {
-                console.log("🚀 Step 1: Wallet connect කරන්න උත්සාහ කරනවා...");
+                console.log("🚀 Step 1: Attempting to connect wallet...");
                 
                 const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
                 const provider = new ethers.BrowserProvider(window.ethereum);
                 
-                console.log("✅ Step 1a: Wallet එක සම්බන්ධ වුණා -", accounts[0]);
+                console.log("✅ Step 1a: Wallet connected -", accounts[0]);
                 
                 // Test balance retrieval for connected account
                 try {
@@ -386,7 +386,7 @@ const TraderDashboard = () => {
                 
                 console.log("✅ Step 1e: Balance updates started (every 5 seconds)");
             } else {
-                console.error("❌ Step 1f: MetaMask සොයාගත නොහැක!");
+                console.error("❌ Step 1f: MetaMask not found!");
                 alert("Please install MetaMask!");
             }
         } catch (error) {
@@ -395,7 +395,7 @@ const TraderDashboard = () => {
         }
     };
 
-    // --- 1. Buy THW (ETH යවලා THW ටෝකන් ලබා ගැනීම) - CPMM ---
+    // --- 1. Buy THW (Send ETH to get THW tokens) - CPMM ---
     const handleBuy = async () => {
         if (!thwReceive || isNaN(thwReceive)) return alert("Please enter a valid THW amount");
         if (!account || !poolContract) return alert("Please connect wallet first");
@@ -438,7 +438,7 @@ const TraderDashboard = () => {
         }
     };
 
-    // --- 2. Sell THW (THW ටෝකන් දීලා ETH ලබා ගැනීම) - CPMM ---
+    // --- 2. Sell THW (Send THW tokens to get ETH) - CPMM ---
     const handleSell = async () => {
         if (!thwReceive || isNaN(thwReceive)) return alert("Please enter a valid THW amount");
         if (!account || !poolContract) return alert("Please connect wallet first");

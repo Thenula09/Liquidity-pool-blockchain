@@ -23,7 +23,6 @@ export default function OwnerDashboard() {
   const [currentPrice, setCurrentPrice] = useState(0);
   const [poolContract, setPoolContract] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [contractOwner, setContractOwner] = useState(null);
 
   // Real-time chart data state
   const [chartData, setChartData] = useState([]);
@@ -38,23 +37,6 @@ export default function OwnerDashboard() {
   console.log("Current Account:", account);
   console.log("Is Owner?:", isOwner);
 
-  // Load contract owner
-  const loadContractOwner = useCallback(async () => {
-    if (!poolContract) return;
-    
-    try {
-      const owner = await poolContract.owner();
-      setContractOwner(owner);
-      console.log("Contract owner:", owner);
-      console.log("Contract owner (lowercase):", owner.toLowerCase());
-      console.log("Connected account:", account);
-      console.log("Connected account (lowercase):", account?.toLowerCase());
-      console.log("Are they equal?", account?.toLowerCase() === owner.toLowerCase());
-    } catch (error) {
-      console.error("Error loading contract owner:", error);
-    }
-  }, [poolContract]);
-
   // Initialize contract
   useEffect(() => {
     console.log("Initializing contract...");
@@ -65,11 +47,6 @@ export default function OwnerDashboard() {
         const contract = new ethers.Contract(CONTRACTS.poolAddress, SimplePoolABI, provider);
         setPoolContract(contract);
         console.log("Contract initialized successfully");
-        
-        // Load contract owner after contract is initialized
-        setTimeout(() => {
-          loadContractOwner();
-        }, 100);
       } catch (error) {
         console.error("Error initializing contract:", error);
       }
@@ -266,14 +243,14 @@ export default function OwnerDashboard() {
     const fetchPrice = async () => {
       if (poolContract) {
         try {
-          // Pool එකේ තියෙන ETH සහ THW ප්‍රමාණයන් ලබා ගැනීම
+          // Get ETH and THW reserves from the pool
           const [ethReserves, thwReserves] = await poolContract.getReserves();
 
           const ethAmount = parseFloat(ethers.formatEther(ethReserves));
           const thwAmount = parseFloat(ethers.formatUnits(thwReserves, 18));
 
-          // මිල ගණනය කිරීම: 1 THW = ? ETH
-          // ආරම්භයේදී liquidity නැතිනම් මිල 0 ලෙස පෙන්වීමට
+          // Calculate price: 1 THW = ? ETH
+          // Show price as 0 if no liquidity initially
           let currentPrice = 0;
           if (thwAmount > 0 && ethAmount > 0) {
             currentPrice = ethAmount / thwAmount;
@@ -284,12 +261,12 @@ export default function OwnerDashboard() {
 
           const newDataPoint = {
             time: new Date().toLocaleTimeString(),
-            price: currentPrice.toFixed(6) // දශමස්ථාන 6කට පෙන්වමු
+            price: currentPrice.toFixed(6) // Show 6 decimal places
           };
 
           setChartData(prev => {
-            // මිල වෙනස් වුණේ නැත්නම් chart එක එකම මට්ටමේ පවත්වා ගැනීමට
-            return [...prev.slice(-19), newDataPoint]; // points 20ක් පෙන්වමු
+            // Keep chart at same level if price doesn't change
+            return [...prev.slice(-19), newDataPoint]; // Show 20 points
           });
         } catch (err) {
           console.error("Price fetch error:", err);
@@ -297,7 +274,7 @@ export default function OwnerDashboard() {
       }
     };
 
-    const interval = setInterval(fetchPrice, 3000); // තත්පර 3න් 3ට update වේ
+    const interval = setInterval(fetchPrice, 3000); // Update every 3 seconds
     return () => clearInterval(interval);
   }, [poolContract]);
 
@@ -517,7 +494,7 @@ export default function OwnerDashboard() {
       const signer = await provider.getSigner();
       const contractWithSigner = poolContract.connect(signer);
 
-      // ETH සහ THW අගයන් Blockchain එකට ගැළපෙන විදිහට (Wei) හරවමු
+      // Convert ETH and THW values to Blockchain-compatible format (Wei)
       const ethInWei = ethers.parseEther(addEth);
       const thwInWei = ethers.parseUnits(addThw, 18);
 
@@ -531,20 +508,20 @@ export default function OwnerDashboard() {
       await approveTx.wait();
       console.log("THW tokens approved");
 
-      // Contract එකේ function එක call කිරීම
+      // Call contract function
       // Contract function: addLiquidity(uint256 _tokenAmount) public payable
       const tx = await contractWithSigner.addLiquidity(thwInWei, { 
         value: ethInWei,
         gasLimit: 300000
       });
       
-      await tx.wait(); // Transaction එක confirm වන තෙක් ඉමු
+      await tx.wait(); // Wait for transaction confirmation
       
       alert("Liquidity Added Successfully! Price updated.");
-      setAddEth(""); // Inputs clear කරමු
+      setAddEth(""); // Clear inputs
       setAddThw("");
 
-      // වැදගත්ම දේ: Transaction එක ඉවර වුණ ගමන් අලුත් මිල Chart එකට ගන්න
+      // Important: Get new price for chart after transaction completes
       loadPoolData(); 
 
     } catch (err) {

@@ -24,14 +24,14 @@ contract SimplePool {
         console.log("SimplePool deployed successfully. Owner: %s", owner);
     }
 
-    // Liquidity එකතු කිරීම (ETH + THW)
+    // Add liquidity (ETH + THW)
     function addLiquidity(uint256 _tokenAmount) public payable {
         console.log("=== INSIDE CONTRACT ADDLIQUIDITY ===");
         console.log("Adding Liquidity - From: %s, ETH: %s, THW: %s", msg.sender, msg.value, _tokenAmount);
         require(msg.value > 0, "ETH required");
         require(_tokenAmount > 0, "Tokens required");
 
-        // Owner ගෙන් ටෝකන් ටික Contract එකට ගන්නවා
+        // Transfer tokens from owner to contract
         console.log("Transferring %s THW tokens from user to pool", _tokenAmount);
         token.transferFrom(msg.sender, address(this), _tokenAmount);
 
@@ -44,7 +44,7 @@ contract SimplePool {
         console.log("=== END CONTRACT ADDLIQUIDITY ===");
     }
 
-    // Liquidity ඉවත් කිරීම (Owner ට විතරයි පුළුවන්)
+    // Remove liquidity (Owner only)
     function removeLiquidity() public {
         require(msg.sender == owner, "Only owner can remove");
         
@@ -119,7 +119,7 @@ contract SimplePool {
         console.log("Sell Transaction Completed Successfully!");
     }
 
-    // වර්තමාන මිල ලබා ගැනීම (ETH/THW)
+    // Get current price (ETH/THW)
     function getPrice() public view returns (uint256) {
         if (tokenReserve == 0) return 0;
         uint256 price = (ethReserve * 1e18) / tokenReserve;
