@@ -1,13 +1,27 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import contractInfo from '../../contracts/contract-info.json';
+import { CONTRACTS } from '../../constants/contracts.js';
 import SimplePoolABI from '../../contracts/SimplePoolABI.json';
+import THWTokenABI from '../../contracts/THWTokenABI.json';
+
+// Debug: Verify ABIs are loaded correctly
+console.log("🔍 SimplePool ABI Type:", typeof SimplePoolABI, "Is Array:", Array.isArray(SimplePoolABI), "Length:", SimplePoolABI?.length);
+console.log("🔍 THW Token ABI Type:", typeof THWTokenABI, "Is Array:", Array.isArray(THWTokenABI), "Length:", THWTokenABI?.length);
+console.log("🔍 Contract Addresses:", CONTRACTS);
+
+// Check first item of each ABI
+console.log("🔍 SimplePool ABI First Item:", SimplePoolABI?.[0]);
+console.log("🔍 THW Token ABI First Item:", THWTokenABI?.[0]);
 
 const TraderDashboard = () => {
     const [account, setAccount] = useState(null);
     const [poolContract, setPoolContract] = useState(null);
     const [loading, setLoading] = useState(false);
+    
+    // User balances
+    const [userETHBalance, setUserETHBalance] = useState('0.0000');
+    const [userTHWBalance, setUserTHWBalance] = useState('0.0000');
     
     // Pool data
     const [totalTHW, setTotalTHW] = useState(0);
@@ -22,8 +36,93 @@ const TraderDashboard = () => {
     const [thwReceive, setThwReceive] = useState(''); // THW amount user wants to receive
     const [ethPay, setEthPay] = useState(''); // ETH amount needed to pay (calculated)
     const [priceImpact, setPriceImpact] = useState(0); // Price impact percentage
+    
+    // Transaction history
+    const [transactions, setTransactions] = useState([]);
+    const [showHistory, setShowHistory] = useState(false);
 
-    // THW gana enter karana kota ETH gana calculate karana function eka
+    // Fetch transaction history
+    const fetchTransactionHistory = useCallback(async () => {
+        if (!account || !poolContract) return;
+        
+        try {
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            
+            // Get transaction history for the current account
+            const currentBlock = await provider.getBlockNumber();
+            const fromBlock = Math.max(0, currentBlock - 1000); // Last 1000 blocks
+            
+            // Filter for Swap events (both buy and sell)
+            const swapFilter = {
+                address: CONTRACTS.poolAddress,
+                topics: [
+                    ethers.id("Swap(address,address,uint256,uint256,uint256,uint256)"),
+                    null, // any sender
+                    null  // any recipient
+                ],
+                fromBlock: fromBlock,
+                toBlock: 'latest'
+            };
+            
+            const logs = await provider.getLogs(swapFilter);
+            
+            const userTransactions = logs.map(log => {
+                const parsed = poolContract.interface.parseLog(log);
+                const isUserTransaction = parsed.args.sender.toLowerCase() === account.toLowerCase();
+                
+                if (isUserTransaction) {
+                    const amount0In = parseFloat(ethers.formatEther(parsed.args.amount0In));
+                    const amount1In = parseFloat(ethers.formatUnits(parsed.args.amount1In, 18));
+                    const amount0Out = parseFloat(ethers.formatEther(parsed.args.amount0Out));
+                    const amount1Out = parseFloat(ethers.formatUnits(parsed.args.amount1Out, 18));
+                    
+                    // Determine transaction type
+                    let type, ethAmount, thwAmount;
+                    if (amount0In > 0 && amount1Out > 0) {
+                        // ETH in, THW out = Buy
+                        type = 'BUY';
+                        ethAmount = amount0In;
+                        thwAmount = amount1Out;
+                    } else if (amount1In > 0 && amount0Out > 0) {
+                        // THW in, ETH out = Sell
+                        type = 'SELL';
+                        ethAmount = amount0Out;
+                        thwAmount = amount1In;
+                    }
+                    
+                    return {
+                        hash: log.transactionHash,
+                        type: type,
+                        ethAmount: ethAmount,
+                        thwAmount: thwAmount,
+                        timestamp: new Date(log.blockNumber * 12000).toLocaleString(), // Approximate 12s block time
+                        blockNumber: log.blockNumber
+                    };
+                }
+                return null;
+            }).filter(tx => tx !== null);
+            
+            setTransactions(userTransactions.reverse()); // Most recent first
+        } catch (error) {
+            console.error("Error fetching transaction history:", error);
+        }
+    }, [account, poolContract]);
+
+    // Add transaction to history
+    const addTransactionToHistory = (type, ethAmount, thwAmount, txHash) => {
+        const newTransaction = {
+            hash: txHash,
+            type: type,
+            ethAmount: ethAmount,
+            thwAmount: thwAmount,
+            timestamp: new Date().toLocaleString(),
+            blockNumber: 'pending'
+        };
+        
+        setTransactions(prev => [newTransaction, ...prev]);
+    };
+
+    // THW gana enter karana kota ETH gana calculate karana function eka (CPMM Formula)
     const handleTHWChange = (e) => {
         const thwAmount = parseFloat(e.target.value) || 0;
         setThwReceive(e.target.value);
@@ -32,21 +131,15 @@ const TraderDashboard = () => {
         const poolTHW = parseFloat(totalTHW) || 0;
 
         if (thwAmount > 0 && poolTHW > 0 && poolTHW > thwAmount) {
-            // Constant Product Formula: ETH_needed = (ETH_pool * THW_out) / (THW_pool - THW_out) * (1 + fee)
-            const fee = 0.003; // 0.3% fee
-            
-            // Calculate ETH needed without fee
+            // CPMM Formula for Buy (ETH -> THW): ETH_needed = (ETH_pool * THW_out) / (THW_pool - THW_out)
             const ethNeeded = (poolETH * thwAmount) / (poolTHW - thwAmount);
             
-            // Add fee
-            const ethWithFee = ethNeeded * (1 + fee);
-            
             // Calculate price impact
-            const currentPriceETH = poolETH / poolTHW;
-            const newPriceETH = (poolETH + ethNeeded) / (poolTHW - thwAmount);
-            const impact = ((newPriceETH - currentPriceETH) / currentPriceETH) * 100;
+            const currentPrice = poolETH / poolTHW;
+            const newPrice = (poolETH + ethNeeded) / (poolTHW - thwAmount);
+            const impact = ((newPrice - currentPrice) / currentPrice) * 100;
             
-            setEthPay(ethWithFee.toFixed(6));
+            setEthPay(ethNeeded.toFixed(6));
             setPriceImpact(Math.abs(impact).toFixed(2));
         } else {
             setEthPay('0');
@@ -54,19 +147,35 @@ const TraderDashboard = () => {
         }
     };
 
+    // Generate initial chart data
+    const generateInitialData = () => {
+        const initialData = [];
+        const basePrice = 0.000668;
+        
+        for (let i = 10; i >= 0; i--) {
+            const time = new Date(Date.now() - i * 3000).toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            const price = basePrice * (1 + (Math.random() - 0.5) * 0.1);
+            initialData.push({ time, price });
+        }
+        
+        setChartData(initialData);
+    };
+
     // Load pool data
     const loadPoolData = useCallback(async () => {
         if (!poolContract) return;
         
         try {
-            const [ethInPool, tokensInPool, price] = await Promise.all([
-                poolContract.totalEthInPool(),
-                poolContract.totalTokensInPool(),
-                poolContract.getPrice()
-            ]);
+            // Use the new CPMM getReserves function
+            const [ethReserves, tokenReserves] = await poolContract.getReserves();
+            const price = await poolContract.getPrice();
             
-            setTotalETH(ethers.formatEther(ethInPool));
-            setTotalTHW(ethers.formatUnits(tokensInPool, 18));
+            setTotalETH(ethers.formatEther(ethReserves));
+            setTotalTHW(ethers.formatUnits(tokenReserves, 18));
             setCurrentPrice(ethers.formatUnits(price, 18));
         } catch (error) {
             console.error("Error loading pool data:", error);
@@ -78,18 +187,50 @@ const TraderDashboard = () => {
         const initContract = async () => {
             if (typeof window !== 'undefined' && window.ethereum) {
                 try {
+                    console.log("🚀 Step 2: Contract එක සකස් කිරීම ආරම්භ කළා...");
+                    
                     const provider = new ethers.BrowserProvider(window.ethereum);
-                    const contract = new ethers.Contract(contractInfo.poolAddress, SimplePoolABI, provider);
+                    console.log("✅ Step 2a: Provider created successfully");
+                    
+                    // ABI එක හරියට තියෙනවද බලමු
+                    console.log("📊 Step 2b: SimplePool ABI Data Check:", {
+                        type: typeof SimplePoolABI,
+                        isArray: Array.isArray(SimplePoolABI),
+                        length: SimplePoolABI?.length,
+                        firstItem: SimplePoolABI?.[0]
+                    });
+                    
+                    if (!SimplePoolABI || !Array.isArray(SimplePoolABI)) {
+                        console.error("❌ Step 2c: SimplePool ABI එක Array එකක් නෙවෙයි! (Check your import)");
+                        return;
+                    }
+                    
+                    console.log("🔍 Step 2d: Using contract address:", CONTRACTS.poolAddress);
+                    const contract = new ethers.Contract(CONTRACTS.poolAddress, SimplePoolABI, provider);
                     setPoolContract(contract);
-                    console.log("Contract initialized successfully");
+                    console.log("✅ Step 2e: Contract initialized successfully at:", CONTRACTS.poolAddress);
+                    
+                    // Load pool data immediately
+                    loadPoolData();
+                    
                 } catch (error) {
-                    console.error("Error initializing contract:", error);
+                    console.error("❌ Step 2f: Error initializing contract:", error);
+                    console.error("❌ Step 2g: Error details:", error.message, error.code, error.reason);
                 }
+            } else {
+                console.error("❌ Step 2h: MetaMask not found");
             }
         };
 
         initContract();
     }, []); // Remove dependency to prevent infinite loop
+
+    // Load transaction history when account changes
+    useEffect(() => {
+        if (account && poolContract) {
+            fetchTransactionHistory();
+        }
+    }, [account, poolContract, fetchTransactionHistory]);
 
     // Load initial data when contract is set
     useEffect(() => {
@@ -103,74 +244,139 @@ const TraderDashboard = () => {
         const fetchPrice = async () => {
             if (poolContract) {
                 try {
-                    const ethReserves = await poolContract.totalEthInPool();
-                    const thwReserves = await poolContract.totalTokensInPool();
+                    // Use the new CPMM getReserves function
+                    const [ethReserves, tokenReserves] = await poolContract.getReserves();
 
                     const ethAmount = parseFloat(ethers.formatEther(ethReserves));
-                    const thwAmount = parseFloat(ethers.formatUnits(thwReserves, 18));
+                    const thwAmount = parseFloat(ethers.formatUnits(tokenReserves, 18));
 
-                    // Calculate price: 1 THW = ? ETH
+                    // මිල ගණනය කිරීම: 1 THW = ? ETH
                     let currentPrice = 0;
                     if (thwAmount > 0) {
                         currentPrice = ethAmount / thwAmount;
                     }
 
-                    const newDataPoint = {
-                        time: new Date().toLocaleTimeString(),
-                        price: currentPrice.toFixed(6)
-                    };
+                    setCurrentPrice(currentPrice.toString());
 
-                    setChartData(prev => {
-                        const newData = [...prev, newDataPoint];
-                        // Keep last 20 points and ensure we have multiple points for chart
-                        if (newData.length > 20) {
-                            return newData.slice(-20);
-                        }
-                        return newData;
+                    // Chart data update
+                    setChartData(prevData => {
+                        const newPoint = {
+                            time: new Date().toLocaleTimeString('en-US', { 
+                                hour: '2-digit', 
+                                minute: '2-digit',
+                                second: '2-digit'
+                            }),
+                            price: currentPrice
+                        };
+
+                        const updatedData = [...prevData, newPoint];
+                        return updatedData.slice(-20); // Keep last 20 points
                     });
-                } catch (err) {
-                    console.error("Price fetch error:", err);
+                } catch (error) {
+                    console.error("Error fetching price:", error);
                 }
             }
         };
 
-        // Initial data generation
-        const generateInitialData = () => {
-            const initialData = [];
-            const basePrice = 0.000668;
-            
-            for (let i = 0; i < 10; i++) {
-                const variation = (Math.random() - 0.5) * 0.0001;
-                const price = (basePrice + variation).toFixed(6);
-                const time = new Date(Date.now() - (9 - i) * 60000).toLocaleTimeString();
-                
-                initialData.push({ time, price });
-            }
-            
-            setChartData(initialData);
-        };
-
-        generateInitialData();
-        const interval = setInterval(fetchPrice, 3000);
-        return () => clearInterval(interval);
+        if (poolContract) {
+            generateInitialData();
+            fetchPrice();
+            const interval = setInterval(fetchPrice, 3000);
+            return () => clearInterval(interval);
+        }
     }, [poolContract]);
+
+    // Cleanup balance interval on unmount
+    useEffect(() => {
+        return () => {
+            if (window.balanceInterval) {
+                clearInterval(window.balanceInterval);
+            }
+        };
+    }, []);
+
+    // Update user balances
+    const updateUserBalances = useCallback(async (userAddress) => {
+        if (!userAddress || !window.ethereum) return;
+        
+        console.log("🚀 updateUserBalances called for address:", userAddress);
+        
+        try {
+            const provider = new ethers.BrowserProvider(window.ethereum);
+            console.log("✅ Provider created successfully");
+            
+            // Get ETH balance
+            const ethBalance = await provider.getBalance(userAddress);
+            console.log("💰 Raw ETH Balance:", ethBalance.toString());
+            console.log("💰 Formatted ETH Balance:", ethers.formatEther(ethBalance));
+            setUserETHBalance(parseFloat(ethers.formatEther(ethBalance)).toFixed(4));
+            
+            // Get THW token balance
+            console.log("🔍 Creating THW Token Contract with address:", CONTRACTS.tokenAddress);
+            const tokenContract = new ethers.Contract(CONTRACTS.tokenAddress, THWTokenABI, provider);
+            console.log("✅ THW Token Contract created successfully");
+            
+            console.log("🔍 Calling balanceOf for address:", userAddress);
+            const thwBalance = await tokenContract.balanceOf(userAddress);
+            console.log("💰 Raw THW Balance:", thwBalance.toString());
+            console.log("💰 Formatted THW Balance:", ethers.formatUnits(thwBalance, 18));
+            setUserTHWBalance(parseFloat(ethers.formatUnits(thwBalance, 18)).toFixed(4));
+            
+            console.log("💰 Balances Updated:", {
+                ETH: ethers.formatEther(ethBalance),
+                THW: ethers.formatUnits(thwBalance, 18)
+            });
+        } catch (error) {
+            console.error("❌ Error updating balances:", error);
+            console.error("❌ Error details:", error.message, error.code, error.reason);
+        }
+    }, []);
 
     // Connect wallet
     const connectWallet = async () => {
         try {
             if (typeof window !== 'undefined' && window.ethereum) {
+                console.log("🚀 Step 1: Wallet connect කරන්න උත්සාහ කරනවා...");
+                
                 const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                const provider = new ethers.BrowserProvider(window.ethereum);
+                
+                console.log("✅ Step 1a: Wallet එක සම්බන්ධ වුණා -", accounts[0]);
+                
+                // Test balance retrieval for connected account
+                try {
+                    const balance = await provider.getBalance(accounts[0]);
+                    console.log("✅ Step 1b: User Balance - Raw:", balance.toString());
+                    console.log("✅ Step 1c: User Balance - Formatted:", ethers.formatEther(balance), "ETH");
+                } catch (balanceError) {
+                    console.error("❌ Step 1d: User balance test failed:", balanceError);
+                }
                 
                 setAccount(accounts[0]);
-                console.log("Wallet connected:", accounts[0]);
+                
+                // Update balances immediately
+                updateUserBalances(accounts[0]);
+                
+                // Set up balance update interval
+                const balanceInterval = setInterval(() => {
+                    updateUserBalances(accounts[0]);
+                }, 5000); // Update every 5 seconds
+                
+                // Store interval ID for cleanup
+                window.balanceInterval = balanceInterval;
+                
+                console.log("✅ Step 1e: Balance updates started (every 5 seconds)");
+            } else {
+                console.error("❌ Step 1f: MetaMask සොයාගත නොහැක!");
+                alert("Please install MetaMask!");
             }
         } catch (error) {
-            console.error("Error connecting wallet:", error);
+            console.error("❌ Step 1g: Error connecting wallet:", error);
             alert("Failed to connect wallet");
         }
     };
 
-    // --- 1. Buy THW (ETH යවලා THW ටෝකන් ලබා ගැනීම) ---
+    // --- 1. Buy THW (ETH යවලා THW ටෝකන් ලබා ගැනීම) - CPMM ---
     const handleBuy = async () => {
         if (!thwReceive || isNaN(thwReceive)) return alert("Please enter a valid THW amount");
         if (!account || !poolContract) return alert("Please connect wallet first");
@@ -183,16 +389,22 @@ const TraderDashboard = () => {
 
             const ethAmountWei = ethers.parseEther(ethPay);
 
-            console.log("Swapping ETH for THW...");
-            // Using the actual contract function: swapETHForTHW
-            const tx = await contract.swapETHForTHW({ value: ethAmountWei });
+            console.log("Buying THW tokens with CPMM...");
+            // Using the new CPMM function: buyTokens()
+            const tx = await contract.buyTokens({ value: ethAmountWei });
             
             await tx.wait();
-            alert("Buy Successful! THW added to your wallet.");
+            
+            // Add to transaction history
+            addTransactionToHistory('BUY', parseFloat(ethPay), parseFloat(thwReceive), tx.hash);
+            
+            alert("Buy Successful! THW tokens added to your wallet.");
             setThwReceive("");
             setEthPay("");
             setPriceImpact(0);
             loadPoolData(); // Update chart and pool data
+            updateUserBalances(account); // Update user balances after transaction
+            fetchTransactionHistory(); // Refresh transaction history
         } catch (err) {
             console.error("Buy Error:", err);
             alert("Transaction Failed: " + err.message);
@@ -201,7 +413,7 @@ const TraderDashboard = () => {
         }
     };
 
-    // --- 2. Sell THW (THW ටෝකන් දීලා ETH ලබා ගැනීම) ---
+    // --- 2. Sell THW (THW ටෝකන් දීලා ETH ලබා ගැනීම) - CPMM ---
     const handleSell = async () => {
         if (!thwReceive || isNaN(thwReceive)) return alert("Please enter a valid THW amount");
         if (!account || !poolContract) return alert("Please connect wallet first");
@@ -211,27 +423,31 @@ const TraderDashboard = () => {
             const provider = new ethers.BrowserProvider(window.ethereum);
             const signer = await provider.getSigner();
             
-            // පියවර A: THW Token Contract එකෙන් Approve ලබා ගැනීම
-            const tokenContract = new ethers.Contract(contractInfo.tokenAddress, [
-                "function approve(address spender, uint256 amount) returns (bool)"
-            ], signer);
+            // Step A: Approve THW tokens for the contract
+            const tokenContract = new ethers.Contract(CONTRACTS.tokenAddress, THWTokenABI, signer);
             const thwAmountWei = ethers.parseUnits(thwReceive, 18);
 
-            console.log("Approving THW for sale...");
-            const approveTx = await tokenContract.approve(contractInfo.poolAddress, thwAmountWei);
+            console.log("Approving THW tokens for sale...");
+            const approveTx = await tokenContract.approve(CONTRACTS.poolAddress, thwAmountWei);
             await approveTx.wait();
 
-            // පියවර B: Swap Function එක Call කිරීම
+            // Step B: Call the CPMM sell function
             const mainContract = poolContract.connect(signer);
-            console.log("Swapping THW for ETH...");
-            const tx = await mainContract.swapTHWForETH(thwAmountWei);
+            console.log("Selling THW tokens with CPMM...");
+            const tx = await mainContract.sellTokens(thwAmountWei);
             
             await tx.wait();
+            
+            // Add to transaction history
+            addTransactionToHistory('SELL', parseFloat(ethPay), parseFloat(thwReceive), tx.hash);
+            
             alert("Sell Successful! ETH sent to your wallet.");
             setThwReceive("");
             setEthPay("");
             setPriceImpact(0);
             loadPoolData(); // Update chart and pool data
+            updateUserBalances(account); // Update user balances after transaction
+            fetchTransactionHistory(); // Refresh transaction history
         } catch (err) {
             console.error("Sell Error:", err);
             alert("Transaction Failed: " + err.message);
@@ -248,31 +464,40 @@ const TraderDashboard = () => {
     };
 
     return (
-        <div className="min-h-screen bg-[#0b0e11] text-white p-6 font-sans">
-            <div className="max-w-6xl mx-auto">
+        <div className="min-h-screen w-screen bg-[#1a1b1e] text-white font-sans overflow-hidden">
+            <div className="h-screen w-full flex flex-col">
                 
                 {/* Header - Wallet Connection */}
-                <div className="flex justify-between items-center mb-8 bg-[#161a1e] p-4 rounded-2xl border border-gray-800">
+                <div className="flex justify-between items-center bg-[#25262b] p-3 lg:p-4 border border-[#3a3d45]">
                     <h1 className="text-xl font-bold flex items-center gap-2">
                         <span className="w-3 h-3 bg-[#00ff88] rounded-full animate-pulse"></span>
-                        THW Trader Terminal
+                        Thenula Trader Terminal
                     </h1>
                     {!account ? (
                         <button onClick={connectWallet} disabled={loading} className="bg-[#00ff88] text-black px-6 py-2 rounded-xl font-bold hover:bg-[#00e67a] transition-all disabled:opacity-50">
                             {loading ? 'Connecting...' : 'Connect Wallet'}
                         </button>
                     ) : (
-                        <div className="text-sm font-mono text-gray-400 bg-black/40 px-4 py-2 rounded-xl border border-gray-800">
-                            {account.slice(0,6)}...{account.slice(-4)}
+                        <div className="flex items-center gap-4">
+                            <div className="text-right">
+                                <p className="text-xs text-gray-500 mb-1">Your Balances</p>
+                                <div className="flex gap-3">
+                                    <span className="text-sm font-bold text-white">{userETHBalance} ETH</span>
+                                    <span className="text-sm font-bold text-[#00ff88]">{userTHWBalance} THW</span>
+                                </div>
+                            </div>
+                            <div className="text-sm font-mono text-gray-400 bg-black/30 px-4 py-2 rounded-xl border border-[#3a3d45]">
+                                {account.slice(0,6)}...{account.slice(-4)}
+                            </div>
                         </div>
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="flex-1 grid grid-cols-1 xl:grid-cols-5 gap-4 p-4 lg:p-6 overflow-hidden">
                     
                     {/* Left: Live Market Chart */}
-                    <div className="lg:col-span-2 space-y-6">
-                        <div className="bg-[#161a1e] p-6 rounded-3xl border border-gray-800 shadow-2xl">
+                    <div className="xl:col-span-3 h-full">
+                        <div className="bg-[#25262b] p-4 lg:p-6 rounded-3xl border border-[#3a3d45] shadow-2xl h-full flex flex-col">
                             <div className="flex justify-between items-end mb-6">
                                 <div>
                                     <p className="text-gray-400 text-xs uppercase tracking-widest mb-1">Current Market Price</p>
@@ -287,7 +512,7 @@ const TraderDashboard = () => {
                             </div>
 
                             {/* Chart Container */}
-                            <div className="h-[350px] w-full mt-4 min-w-[300px]">
+                            <div className="flex-1 w-full min-w-[300px]">
                                 <ResponsiveContainer width="100%" height="100%">
                                     <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                                         <defs>
@@ -296,11 +521,11 @@ const TraderDashboard = () => {
                                                 <stop offset="95%" stopColor="#00ff88" stopOpacity={0}/>
                                             </linearGradient>
                                         </defs>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#2b2f36" vertical={false} opacity={0.2} />
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#3a3d45" vertical={false} opacity={0.4} />
                                         <XAxis dataKey="time" hide />
                                         <YAxis domain={['auto', 'auto']} hide />
                                         <Tooltip 
-                                            contentStyle={{backgroundColor: '#161a1e', border: '1px solid #2b2f36', borderRadius: '12px'}}
+                                            contentStyle={{backgroundColor: '#2c2f38', border: '1px solid #3a3d45', borderRadius: '12px'}}
                                             itemStyle={{color: '#00ff88'}}
                                         />
                                         <Area type="monotone" dataKey="price" stroke="#00ff88" fill="url(#traderColor)" strokeWidth={3} />
@@ -311,77 +536,135 @@ const TraderDashboard = () => {
                     </div>
 
                     {/* Right: Swap/Trading Box */}
-                    <div className="bg-[#161a1e] p-6 rounded-3xl border border-gray-800 shadow-2xl h-fit">
-                        <div className="flex bg-black/40 p-1.5 rounded-2xl mb-8">
+                    <div className="xl:col-span-2 bg-[#25262b] p-4 lg:p-6 rounded-3xl border border-[#3a3d45] shadow-2xl h-full flex flex-col">
+                        <div className="flex bg-black/30 p-1.5 rounded-2xl mb-6">
                             <button 
                                 onClick={() => setSwapMode('buy')}
-                                className={`flex-1 py-3 rounded-xl font-bold transition-all ${swapMode === 'buy' ? 'bg-[#1e2329] text-[#00ff88] shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                                className={`flex-1 py-3 rounded-xl font-bold transition-all ${swapMode === 'buy' ? 'bg-[#2c2f38] text-[#00ff88] shadow-lg' : 'text-gray-400 hover:text-gray-300'}`}
                             > Buy </button>
                             <button 
                                 onClick={() => setSwapMode('sell')}
-                                className={`flex-1 py-3 rounded-xl font-bold transition-all ${swapMode === 'sell' ? 'bg-[#1e2329] text-red-500 shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                                className={`flex-1 py-3 rounded-xl font-bold transition-all ${swapMode === 'sell' ? 'bg-[#2c2f38] text-red-500 shadow-lg' : 'text-gray-400 hover:text-gray-300'}`}
                             > Sell </button>
                         </div>
 
-                        <div className="space-y-5">
-                            <div className="bg-black/20 p-4 rounded-2xl border border-gray-800">
-                                <label className="text-xs text-gray-500 font-bold mb-2 block uppercase">You Receive (THW)</label>
-                                <div className="flex items-center">
-                                    <input 
-                                        type="number"
-                                        value={thwReceive}
-                                        onChange={handleTHWChange}
-                                        placeholder="0.0"
-                                        disabled={loading || !account}
-                                        className="bg-transparent text-2xl font-bold w-full focus:outline-none placeholder:text-gray-700 disabled:opacity-50"
-                                    />
-                                    <span className="text-lg font-bold text-gray-400">THW</span>
+                        <div className="flex-1 flex flex-col justify-between">
+                            <div className="space-y-4">
+                                <div className="bg-black/20 p-4 rounded-2xl border border-[#3a3d45]">
+                                    <label className="text-xs text-gray-400 font-bold mb-2 block uppercase">You Receive (THW)</label>
+                                    <div className="flex items-center">
+                                        <input 
+                                            type="number"
+                                            value={thwReceive}
+                                            onChange={handleTHWChange}
+                                            placeholder="0.0"
+                                            disabled={loading || !account}
+                                            className="bg-transparent text-2xl font-bold w-full focus:outline-none placeholder:text-gray-500 disabled:opacity-50"
+                                        />
+                                        <span className="text-lg font-bold text-gray-300">THW</span>
+                                    </div>
+                                    {parseFloat(thwReceive) > 0 && parseFloat(totalTHW) > 0 && parseFloat(thwReceive) > parseFloat(totalTHW) && (
+                                        <p className="text-red-500 text-xs mt-2">Not enough liquidity in pool</p>
+                                    )}
                                 </div>
-                                {parseFloat(thwReceive) > 0 && parseFloat(totalTHW) > 0 && parseFloat(thwReceive) > parseFloat(totalTHW) && (
-                                    <p className="text-red-500 text-xs mt-2">Not enough liquidity in pool</p>
+
+                                <div className="flex justify-center -my-2 relative z-10">
+                                    <div className="bg-[#2c2f38] p-2 rounded-full border border-[#3a3d45] text-[#00ff88]">
+                                        ↓
+                                    </div>
+                                </div>
+
+                                <div className="bg-black/20 p-4 rounded-2xl border border-[#3a3d45]">
+                                    <label className="text-xs text-gray-400 font-bold mb-2 block uppercase">You Pay (ETH)</label>
+                                    <div className="flex items-center">
+                                        <p className="text-2xl font-bold w-full text-white">
+                                            {ethPay || "0.00"}
+                                        </p>
+                                        <span className="text-lg font-bold text-gray-300">ETH</span>
+                                    </div>
+                                </div>
+
+                                <button 
+                                    onClick={swapMode === 'buy' ? handleBuy : handleSell}
+                                    disabled={loading || !account || !thwReceive || (parseFloat(totalTHW) > 0 && parseFloat(thwReceive) > parseFloat(totalTHW))}
+                                    className={`w-full py-5 rounded-2xl font-black text-lg shadow-xl transform active:scale-95 transition-all ${
+                                        swapMode === 'buy' 
+                                        ? 'bg-[#00ff88] hover:bg-[#00e67a] text-black shadow-[#00ff88]/10' 
+                                        : 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/10'
+                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                >
+                                    {loading ? 'Processing...' : (swapMode === 'buy' ? 'CONFIRM BUY (SWAP ETH)' : 'CONFIRM SELL (SWAP THW)')}
+                                </button>
+                            </div>
+
+                            {/* Trade Details */}
+                            <div className="space-y-3 bg-black/15 p-4 rounded-2xl border border-[#3a3d45]/50 mt-4">
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500 font-medium">Slippage Tolerance</span>
+                                    <span className="text-[#00ff88] font-bold">0.5%</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500 font-medium">Price Impact</span>
+                                    <span className={`${priceImpact > 5 ? 'text-red-500' : priceImpact > 2 ? 'text-yellow-500' : 'text-[#00ff88]'} font-bold`}>
+                                        {priceImpact > 0 ? `${priceImpact}%` : '< 0.01%'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Transaction History */}
+                            <div className="mt-4">
+                                <button 
+                                    onClick={() => setShowHistory(!showHistory)}
+                                    className="w-full bg-black/20 p-3 rounded-2xl border border-[#3a3d45] text-left flex justify-between items-center hover:bg-black/30 transition-all"
+                                >
+                                    <span className="text-sm font-bold text-gray-300">Transaction History</span>
+                                    <span className="text-xs text-gray-500">{showHistory ? '▼' : '▶'} {transactions.length} transactions</span>
+                                </button>
+                                
+                                {showHistory && (
+                                    <div className="mt-2 bg-black/20 rounded-2xl border border-[#3a3d45] max-h-48 overflow-y-auto">
+                                        {transactions.length === 0 ? (
+                                            <div className="p-4 text-center text-gray-400 text-sm">
+                                                No transactions yet
+                                            </div>
+                                        ) : (
+                                            <div className="divide-y divide-[#3a3d45]">
+                                                {transactions.map((tx, index) => (
+                                                    <div key={index} className="p-3 hover:bg-black/30 transition-all">
+                                                        <div className="flex justify-between items-start">
+                                                            <div className="flex-1">
+                                                                <div className="flex items-center gap-2 mb-1">
+                                                                    <span className={`text-xs font-bold px-2 py-1 rounded ${
+                                                                        tx.type === 'BUY' 
+                                                                        ? 'bg-[#00ff88]/20 text-[#00ff88]' 
+                                                                        : 'bg-red-500/20 text-red-500'
+                                                                    }`}>
+                                                                        {tx.type}
+                                                                    </span>
+                                                                    <span className="text-xs text-gray-500">
+                                                                        {tx.timestamp}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="text-sm">
+                                                                    <span className="text-white font-medium">
+                                                                        {tx.ethAmount.toFixed(6)} ETH
+                                                                    </span>
+                                                                    <span className="text-gray-400 mx-2">↔</span>
+                                                                    <span className="text-[#00ff88] font-medium">
+                                                                        {tx.thwAmount.toFixed(2)} THW
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            <div className="text-xs text-gray-400 font-mono">
+                                                                {tx.hash.slice(0, 6)}...{tx.hash.slice(-4)}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 )}
-                            </div>
-
-                            <div className="flex justify-center -my-3 relative z-10">
-                                <div className="bg-[#1e2329] p-2 rounded-full border border-gray-800 text-[#00ff88]">
-                                    ↓
-                                </div>
-                            </div>
-
-                            <div className="bg-black/20 p-4 rounded-2xl border border-gray-800">
-                                <label className="text-xs text-gray-500 font-bold mb-2 block uppercase">You Pay (ETH)</label>
-                                <div className="flex items-center">
-                                    <p className="text-2xl font-bold w-full text-white">
-                                        {ethPay || "0.00"}
-                                    </p>
-                                    <span className="text-lg font-bold text-gray-400">ETH</span>
-                                </div>
-                            </div>
-
-                            <button 
-                                onClick={swapMode === 'buy' ? handleBuy : handleSell}
-                                disabled={loading || !account || !thwReceive || (parseFloat(totalTHW) > 0 && parseFloat(thwReceive) > parseFloat(totalTHW))}
-                                className={`w-full py-5 rounded-2xl font-black text-lg shadow-xl transform active:scale-95 transition-all ${
-                                    swapMode === 'buy' 
-                                    ? 'bg-[#00ff88] hover:bg-[#00e67a] text-black shadow-[#00ff88]/10' 
-                                    : 'bg-red-500 hover:bg-red-600 text-white shadow-red-500/10'
-                                } disabled:opacity-50 disabled:cursor-not-allowed`}
-                            >
-                                {loading ? 'Processing...' : (swapMode === 'buy' ? 'CONFIRM BUY (SWAP ETH)' : 'CONFIRM SELL (SWAP THW)')}
-                            </button>
-                        </div>
-
-                        {/* Trade Details */}
-                        <div className="mt-8 space-y-3 bg-black/10 p-4 rounded-2xl border border-gray-800/50">
-                            <div className="flex justify-between text-xs">
-                                <span className="text-gray-500 font-medium">Slippage Tolerance</span>
-                                <span className="text-[#00ff88] font-bold">0.5%</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                                <span className="text-gray-500 font-medium">Price Impact</span>
-                                <span className={`${priceImpact > 5 ? 'text-red-500' : priceImpact > 2 ? 'text-yellow-500' : 'text-[#00ff88]'} font-bold`}>
-                                    {priceImpact > 0 ? `${priceImpact}%` : '< 0.01%'}
-                                </span>
                             </div>
                         </div>
                     </div>

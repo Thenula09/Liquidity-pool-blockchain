@@ -2,8 +2,14 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ethers } from 'ethers';
 import { useNavigate } from 'react-router-dom';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import contractInfo from '../../contracts/contract-info.json';
-import SimplePoolABI from '../../contracts/SimplePool.json';
+import { CONTRACTS } from '../../constants/contracts.js';
+import SimplePoolABI from '../../contracts/SimplePoolABI.json';
+import THWTokenABI from '../../contracts/THWTokenABI.json';
+
+// Debug: Verify ABIs are loaded correctly
+console.log("🔍 Owner Dashboard - SimplePool ABI Type:", typeof SimplePoolABI, "Is Array:", Array.isArray(SimplePoolABI), "Length:", SimplePoolABI?.length);
+console.log("🔍 Owner Dashboard - THW Token ABI Type:", typeof THWTokenABI, "Is Array:", Array.isArray(THWTokenABI), "Length:", THWTokenABI?.length);
+console.log("🔍 Owner Dashboard - Contract Addresses:", CONTRACTS);
 
 export default function OwnerDashboard() {
   const navigate = useNavigate();
@@ -56,7 +62,7 @@ export default function OwnerDashboard() {
       console.log("MetaMask detected, initializing provider...");
       try {
         const provider = new ethers.BrowserProvider(window.ethereum);
-        const contract = new ethers.Contract(contractInfo.poolAddress, SimplePoolABI, provider);
+        const contract = new ethers.Contract(CONTRACTS.poolAddress, SimplePoolABI, provider);
         setPoolContract(contract);
         console.log("Contract initialized successfully");
         
@@ -145,49 +151,67 @@ export default function OwnerDashboard() {
   }, [poolContract, account]);
 
   // Load pool data
-  const loadPoolData = async () => {
+  const loadPoolData = useCallback(async () => {
     if (!poolContract) return;
     
     try {
-      const [ethInPool, tokensInPool, price] = await Promise.all([
-        poolContract.totalEthInPool(),
-        poolContract.totalTokensInPool(),
-        poolContract.getPrice()
-      ]);
+      console.log("🔍 Loading pool data...");
       
-      setTotalETH(ethers.formatEther(ethInPool));
-      setTotalTHW(ethers.formatUnits(tokensInPool, 18));
+      // Use the correct getReserves() function from the contract
+      const [ethReserve, tokenReserve] = await poolContract.getReserves();
+      const price = await poolContract.getPrice();
+      
+      console.log("💰 Pool Reserves:", {
+        eth: ethers.formatEther(ethReserve),
+        thw: ethers.formatUnits(tokenReserve, 18),
+        price: ethers.formatUnits(price, 18)
+      });
+      
+      setTotalETH(ethers.formatEther(ethReserve));
+      setTotalTHW(ethers.formatUnits(tokenReserve, 18));
       setCurrentPrice(ethers.formatUnits(price, 18));
+      
+      console.log("✅ Pool data loaded successfully!");
     } catch (error) {
-      console.error("Error loading pool data:", error);
+      console.error("❌ Error loading pool data:", error);
+      console.error("❌ Error details:", error.message, error.code, error.reason);
     }
-  };
+  }, [poolContract]);
 
   // Load wallet balance
-  const loadWalletBalance = async () => {
+  const loadWalletBalance = useCallback(async () => {
     if (!account || !window.ethereum) return;
     
     try {
+      console.log("🔄 Loading wallet balance for account:", account);
       const provider = new ethers.BrowserProvider(window.ethereum);
       
       // Load ETH balance
       const ethBalance = await provider.getBalance(account);
+      const formattedETH = ethers.formatEther(ethBalance);
+      console.log("💰 Raw ETH Balance:", ethBalance.toString());
+      console.log("💰 Formatted ETH Balance:", formattedETH);
       
       // Load THW token balance
-      const tokenContract = new ethers.Contract(contractInfo.tokenAddress, [
-        "function balanceOf(address owner) view returns (uint256)"
-      ], provider);
-      
+      const tokenContract = new ethers.Contract(CONTRACTS.tokenAddress, THWTokenABI, provider);
       const thwBalance = await tokenContract.balanceOf(account);
+      const formattedTHW = ethers.formatUnits(thwBalance, 18);
+      console.log("💰 Raw THW Balance:", thwBalance.toString());
+      console.log("💰 Formatted THW Balance:", formattedTHW);
       
-      setWalletBalance({
-        eth: ethers.formatEther(ethBalance),
-        thw: ethers.formatUnits(thwBalance, 18)
-      });
+      const newWalletBalance = {
+        eth: formattedETH,
+        thw: formattedTHW
+      };
+      
+      console.log("🔄 Updating wallet balance state:", newWalletBalance);
+      setWalletBalance(newWalletBalance);
+      console.log("✅ Wallet balance updated successfully!");
     } catch (error) {
-      console.error("Error loading wallet balance:", error);
+      console.error("❌ Error loading wallet balance:", error);
+      console.error("❌ Error details:", error.message, error.code, error.reason);
     }
-  };
+  }, [account]);
 
   // Expected price calculation for preview
   const expectedPrice = useMemo(() => {
@@ -198,8 +222,10 @@ export default function OwnerDashboard() {
     const totalNewEth = parseFloat(totalETH) + ethToAdd;
     const totalNewThw = parseFloat(totalTHW) + thwToAdd;
 
+    // Better price calculation with division by zero protection
     if (totalNewThw > 0) {
-        return (totalNewEth / totalNewThw).toFixed(8);
+      const price = totalNewEth / totalNewThw;
+      return price.toFixed(8); // 8 decimal places for precision
     }
     return "0.00000000";
   }, [addEth, addThw, totalETH, totalTHW]);
@@ -209,7 +235,7 @@ export default function OwnerDashboard() {
     if (poolContract) {
       loadPoolData();
     }
-  }, [poolContract]);
+  }, [poolContract]); // Remove loadPoolData from dependencies
 
   // Load wallet balance - only when account is connected
   useEffect(() => {
@@ -218,14 +244,30 @@ export default function OwnerDashboard() {
     }
   }, [account, poolContract]);
 
+  // Automatic balance updates every 10 seconds
+  useEffect(() => {
+    if (!account) return;
+    
+    console.log("🔄 Setting up automatic balance updates every 10 seconds...");
+    const interval = setInterval(() => {
+      console.log("⏰ Auto-refreshing balances...");
+      loadWalletBalance();
+      loadPoolData();
+    }, 10000); // 10 seconds
+    
+    return () => {
+      console.log("🛑 Clearing balance update interval");
+      clearInterval(interval);
+    };
+  }, [account]);
+
   // Real-time price fetching for chart
   useEffect(() => {
     const fetchPrice = async () => {
       if (poolContract) {
         try {
           // Pool එකේ තියෙන ETH සහ THW ප්‍රමාණයන් ලබා ගැනීම
-          const ethReserves = await poolContract.totalEthInPool();
-          const thwReserves = await poolContract.totalTokensInPool();
+          const [ethReserves, thwReserves] = await poolContract.getReserves();
 
           const ethAmount = parseFloat(ethers.formatEther(ethReserves));
           const thwAmount = parseFloat(ethers.formatUnits(thwReserves, 18));
@@ -233,8 +275,11 @@ export default function OwnerDashboard() {
           // මිල ගණනය කිරීම: 1 THW = ? ETH
           // ආරම්භයේදී liquidity නැතිනම් මිල 0 ලෙස පෙන්වීමට
           let currentPrice = 0;
-          if (thwAmount > 0) {
+          if (thwAmount > 0 && ethAmount > 0) {
             currentPrice = ethAmount / thwAmount;
+            console.log("📊 Calculated Current Price:", currentPrice.toFixed(8));
+          } else {
+            console.log("📊 No liquidity - Price set to 0");
           }
 
           const newDataPoint = {
@@ -347,40 +392,108 @@ export default function OwnerDashboard() {
       return;
     }
 
+    console.log("🚀 handleAddLiquidity called with amount:", liquidityAmount);
+    console.log("🔍 Account:", account);
+    console.log("🔍 Pool Contract:", poolContract);
+
     setLoading(true);
     try {
       const provider = new ethers.BrowserProvider(window.ethereum);
+      console.log("✅ Provider created successfully");
+      
       const signer = await provider.getSigner();
+      console.log("✅ Signer created successfully:", signer.address);
+      
       const contractWithSigner = poolContract.connect(signer);
+      console.log("✅ Contract connected to signer");
       
+      // Fixed Amount: Use user input directly (no limits)
       const tokensToAdd = ethers.parseUnits(liquidityAmount, 18);
-      const ethToAdd = ethers.parseEther("0.1"); // 0.1 ETH
+      const ethToAdd = ethers.parseEther("0.1"); // Fixed 0.1 ETH for simple mode
       
-      // First, approve the contract to spend THW tokens
-      const tokenContract = new ethers.Contract(contractInfo.tokenAddress, [
-        "function approve(address spender, uint256 amount) returns (bool)",
-        "function allowance(address owner, address spender) view returns (uint256)"
-      ], signer);
+      console.log("💰 Amounts to add:", {
+        tokens: tokensToAdd.toString(),
+        eth: ethToAdd.toString(),
+        userRequested: liquidityAmount
+      });
       
-      console.log("Approving THW tokens...");
-      const approveTx = await tokenContract.approve(contractInfo.poolAddress, tokensToAdd);
-      await approveTx.wait();
-      console.log("THW tokens approved");
+      // First, check THW token balance
+      console.log("🔍 Checking THW token balance...");
+      const tokenContract = new ethers.Contract(CONTRACTS.tokenAddress, THWTokenABI, signer);
+      const userBalance = await tokenContract.balanceOf(account);
+      console.log("💰 User THW Balance:", userBalance.toString());
+      
+      if (userBalance < tokensToAdd) {
+        alert(`Insufficient THW tokens! You have ${ethers.formatUnits(userBalance, 18)} THW, but trying to add ${liquidityAmount} THW`);
+        return;
+      }
+      
+      // Check current allowance
+      console.log("🔍 Checking current allowance...");
+      const currentAllowance = await tokenContract.allowance(account, CONTRACTS.poolAddress);
+      console.log("💰 Current Allowance:", currentAllowance.toString());
+      
+      // Only approve if needed
+      if (currentAllowance < tokensToAdd) {
+        console.log("🔍 Approving THW tokens...");
+        const approveTx = await tokenContract.approve(CONTRACTS.poolAddress, tokensToAdd);
+        console.log("📝 Approval transaction sent:", approveTx.hash);
+        await approveTx.wait();
+        console.log("✅ THW tokens approved");
+      } else {
+        console.log("✅ Sufficient allowance already exists");
+      }
       
       // Then add liquidity
-      console.log("Adding liquidity...");
+      console.log("🔍 Adding liquidity to pool...");
+      console.log("🔍 Contract Address:", CONTRACTS.poolAddress);
+      console.log("🔍 Function Call: addLiquidity(uint256 _tokenAmount)");
+      console.log("🔍 Parameters:", tokensToAdd.toString());
+      console.log("🔍 ETH Value:", ethToAdd.toString());
+      
+      // Contract function: addLiquidity(uint256 _tokenAmount) public payable
       const addLiquidityTx = await contractWithSigner.addLiquidity(tokensToAdd, {
-        value: ethToAdd
+        value: ethToAdd,
+        gasLimit: 300000
       });
+      console.log("📝 Liquidity transaction sent:", addLiquidityTx.hash);
 
-      await addLiquidityTx.wait();
-      alert("Liquidity added successfully!");
+      const receipt = await addLiquidityTx.wait();
+      console.log("✅ Liquidity added successfully!");
+      console.log("📊 Transaction Receipt:", receipt);
+      
+      // ✅ Immediately refresh both pool data and wallet balances
+      console.log("🔄 Refreshing data after successful transaction...");
+      await loadPoolData();
+      await loadWalletBalance();
+      console.log("✅ Data refresh completed!");
+      
+      alert(`Liquidity added successfully! Added ${liquidityAmount} THW and 0.1 ETH`);
       setLiquidityAmount('');
-      loadPoolData();
-      loadWalletBalance();
     } catch (error) {
-      console.error("Error adding liquidity:", error);
-      alert("Failed to add liquidity: " + (error.message || "Unknown error"));
+      console.error("❌ Error adding liquidity:", error);
+      console.error("❌ Error details:", error.message, error.code, error.reason);
+      
+      // Try to extract revert reason if available
+      if (error.data) {
+        console.error("❌ Error data:", error.data);
+        try {
+          // Try to decode the revert reason using poolContract
+          const decodedError = poolContract.interface.parseError(error.data);
+          console.error("❌ Decoded error:", decodedError);
+        } catch (decodeError) {
+          console.error("❌ Could not decode error:", decodeError);
+        }
+      }
+      
+      // Check specific error types
+      if (error.code === 'UNPREDICTABLE_GAS_LIMIT') {
+        alert("Transaction failed due to gas estimation. Please try a smaller amount.");
+      } else if (error.code === 'INSUFFICIENT_FUNDS') {
+        alert("Insufficient ETH for gas fees.");
+      } else {
+        alert("Failed to add liquidity: " + (error.message || "Unknown error"));
+      }
     } finally {
       setLoading(false);
     }
@@ -411,17 +524,19 @@ export default function OwnerDashboard() {
       console.log(`Adding ${addEth} ETH and ${addThw} THW to pool...`);
 
       // First, approve THW tokens
-      const tokenContract = new ethers.Contract(contractInfo.tokenAddress, [
-        "function approve(address spender, uint256 amount) returns (bool)"
-      ], signer);
+      const tokenContract = new ethers.Contract(CONTRACTS.tokenAddress, THWTokenABI, signer);
       
       console.log("Approving THW tokens...");
-      const approveTx = await tokenContract.approve(contractInfo.poolAddress, thwInWei);
+      const approveTx = await tokenContract.approve(CONTRACTS.poolAddress, thwInWei);
       await approveTx.wait();
       console.log("THW tokens approved");
 
       // Contract එකේ function එක call කිරීම
-      const tx = await contractWithSigner.addLiquidity(thwInWei, { value: ethInWei });
+      // Contract function: addLiquidity(uint256 _tokenAmount) public payable
+      const tx = await contractWithSigner.addLiquidity(thwInWei, { 
+        value: ethInWei,
+        gasLimit: 300000
+      });
       
       await tx.wait(); // Transaction එක confirm වන තෙක් ඉමු
       
@@ -467,136 +582,342 @@ export default function OwnerDashboard() {
   };
 
   return (
-    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif', backgroundColor: '#f5f5f5', minHeight: '100vh' }}>
-      {/* Logout Button - Left Side */}
-      <div style={{ position: 'fixed', left: '20px', top: '20px', zIndex: 1000 }}>
+    <div style={{ 
+      padding: '0', 
+      margin: '0',
+      fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', 
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      minHeight: '100vh',
+      width: '100vw',
+      position: 'relative',
+      overflowX: 'hidden'
+    }}>
+      
+      {/* Background Pattern */}
+      <div style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Ccircle cx='30' cy='30' r='4'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+        pointerEvents: 'none'
+      }} />
+
+      {/* Logout Button - Floating */}
+      <div style={{ position: 'fixed', right: '30px', top: '30px', zIndex: 1000 }}>
         <button
           onClick={handleLogout}
           style={{
-            padding: '12px 20px',
-            backgroundColor: '#dc3545',
+            padding: '12px 24px',
+            background: 'rgba(255, 255, 255, 0.2)',
+            backdropFilter: 'blur(10px)',
             color: 'white',
-            border: 'none',
-            borderRadius: '8px',
+            border: '1px solid rgba(255, 255, 255, 0.3)',
+            borderRadius: '12px',
             cursor: 'pointer',
             fontSize: '14px',
-            fontWeight: 'bold',
-            boxShadow: '0 2px 8px rgba(220, 53, 69, 0.3)',
+            fontWeight: '600',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
             transition: 'all 0.3s ease',
             display: 'flex',
             alignItems: 'center',
             gap: '8px'
           }}
           onMouseOver={(e) => {
-            e.target.style.backgroundColor = '#c82333';
+            e.target.style.background = 'rgba(255, 255, 255, 0.3)';
             e.target.style.transform = 'translateY(-2px)';
+            e.target.style.boxShadow = '0 12px 40px rgba(0, 0, 0, 0.2)';
           }}
           onMouseOut={(e) => {
-            e.target.style.backgroundColor = '#dc3545';
+            e.target.style.background = 'rgba(255, 255, 255, 0.2)';
             e.target.style.transform = 'translateY(0)';
+            e.target.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.1)';
           }}
         >
           🚪 Logout
         </button>
       </div>
 
-      <div style={{ backgroundColor: 'white', padding: '20px', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
-        <h2 style={{ color: '#333', marginBottom: '20px' }}>Owner Dashboard</h2>
+      {/* Main Container */}
+      <div style={{ 
+        maxWidth: '1600px', 
+        margin: '0 auto', 
+        padding: '15px',
+        width: '100%',
+        minHeight: '100vh'
+      }}>
         
-        {/* Wallet Connection */}
-        <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
-          <h3 style={{ color: '#555', marginBottom: '10px' }}>Wallet Connection</h3>
-          {!account ? (
-            <button 
-              onClick={connectWallet}
-              disabled={loading}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: loading ? '#6c757d' : '#007bff',
-                color: 'white',
-                border: 'none',
-                borderRadius: '5px',
-                cursor: loading ? 'not-allowed' : 'pointer',
-                fontSize: '16px'
-              }}
-            >
-              {loading ? 'Connecting...' : 'Connect Wallet'}
-            </button>
-          ) : (
+        {/* Header */}
+        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+          <h1 style={{ 
+            color: 'white', 
+            fontSize: '36px', 
+            fontWeight: '800', 
+            marginBottom: '5px',
+            textShadow: '0 2px 20px rgba(0, 0, 0, 0.3)'
+          }}>
+            Owner Dashboard
+          </h1>
+          <p style={{ color: 'rgba(255, 255, 255, 0.8)', fontSize: '16px', margin: 0 }}>
+            Liquidity Pool Management System
+          </p>
+        </div>
+
+        {/* Wallet Connection Card */}
+        <div style={{ 
+          background: 'rgba(255, 255, 255, 0.95)', 
+          backdropFilter: 'blur(20px)',
+          borderRadius: '16px', 
+          padding: '20px', 
+          marginBottom: '20px',
+          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)',
+          border: '1px solid rgba(255, 255, 255, 0.2)'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ color: '#28a745', marginBottom: '10px' }}>
-                <strong>Connected:</strong> {account.slice(0, 6)}...{account.slice(-4)}
-              </div>
+              <h3 style={{ color: '#1a202c', marginBottom: '8px', fontSize: '20px', fontWeight: '700' }}>
+                🔗 Wallet Connection
+              </h3>
+              {!account ? (
+                <p style={{ color: '#718096', margin: 0 }}>Connect your wallet to manage liquidity</p>
+              ) : (
+                <div>
+                  <p style={{ color: '#48bb78', margin: 0, fontWeight: '600' }}>
+                    ✅ Connected: {account.slice(0, 6)}...{account.slice(-4)}
+                  </p>
+                </div>
+              )}
+            </div>
+            {!account ? (
+              <button 
+                onClick={connectWallet}
+                disabled={loading}
+                style={{
+                  padding: '14px 28px',
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '12px',
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  boxShadow: '0 10px 30px rgba(102, 126, 234, 0.4)',
+                  transition: 'all 0.3s ease',
+                  opacity: loading ? 0.6 : 1
+                }}
+                onMouseOver={(e) => {
+                  if (!loading) {
+                    e.target.style.transform = 'translateY(-2px)';
+                    e.target.style.boxShadow = '0 15px 40px rgba(102, 126, 234, 0.5)';
+                  }
+                }}
+                onMouseOut={(e) => {
+                  e.target.style.transform = 'translateY(0)';
+                  e.target.style.boxShadow = '0 10px 30px rgba(102, 126, 234, 0.4)';
+                }}
+              >
+                {loading ? '⏳ Connecting...' : '🔌 Connect Wallet'}
+              </button>
+            ) : (
               <button 
                 onClick={disconnectWallet}
                 style={{
-                  padding: '8px 16px',
-                  backgroundColor: '#dc3545',
+                  padding: '12px 24px',
+                  background: 'linear-gradient(135deg, #f56565 0%, #ed8936 100%)',
                   color: 'white',
                   border: 'none',
-                  borderRadius: '5px',
+                  borderRadius: '10px',
                   cursor: 'pointer',
-                  fontSize: '14px'
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  boxShadow: '0 8px 25px rgba(245, 101, 101, 0.3)',
+                  transition: 'all 0.3s ease'
+                }}
+                onMouseOver={(e) => {
+                  e.target.style.transform = 'translateY(-2px)';
+                  e.target.style.boxShadow = '0 12px 35px rgba(245, 101, 101, 0.4)';
+                }}
+                onMouseOut={(e) => {
+                  e.target.style.transform = 'translateY(0)';
+                  e.target.style.boxShadow = '0 8px 25px rgba(245, 101, 101, 0.3)';
                 }}
               >
-                Disconnect Wallet
+                🔌 Disconnect
               </button>
-            </div>
-          )}
-        </div>
-
-        {/* Total Wallet Balance */}
-        <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#cce5ff', borderRadius: '8px' }}>
-          <h3 style={{ color: '#004085', marginBottom: '15px' }}>Total Wallet Balance</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#17a2b8' }}>
-                {parseFloat(walletBalance.eth || 0).toFixed(4)}
-              </div>
-              <div style={{ color: '#666' }}>ETH Balance</div>
-            </div>
-            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#fd7e14' }}>
-                {parseFloat(walletBalance.thw || 0).toLocaleString()}
-              </div>
-              <div style={{ color: '#666' }}>THW Balance</div>
-            </div>
-          </div>
-          <div style={{ marginTop: '10px', textAlign: 'center', fontSize: '14px', color: '#004085' }}>
-            <strong>Total Value:</strong> {(parseFloat(walletBalance.eth || 0) + (parseFloat(walletBalance.thw || 0) * parseFloat(currentPrice || 0))).toFixed(4)} ETH
+            )}
           </div>
         </div>
 
-        {/* Total Liquidity Display */}
-        <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#d4edda', borderRadius: '8px' }}>
-          <h3 style={{ color: '#155724', marginBottom: '15px' }}>Total Liquidity Pool</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#007bff' }}>
-                {parseFloat(totalTHW || 0).toLocaleString()}
-              </div>
-              <div style={{ color: '#666' }}>Total THW</div>
-            </div>
-            <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'white', borderRadius: '6px' }}>
-              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#6f42c1' }}>
-                {parseFloat(totalETH || 0).toFixed(4)}
-              </div>
-              <div style={{ color: '#666' }}>Total ETH</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Liquidity Management Box */}
-        <div style={{ marginBottom: '30px', padding: '15px', backgroundColor: '#e2e3e5', borderRadius: '8px' }}>
-          <h3 style={{ color: '#383d41', marginBottom: '15px' }}>Liquidity Management</h3>
+        {/* Stats Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '25px', marginBottom: '30px' }}>
           
-          {isOwner ? (
-            <>
-              {/* Add Liquidity Section */}
-              <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: 'white', borderRadius: '6px' }}>
-                <h4 style={{ color: '#28a745', marginBottom: '10px' }}>✅ Welcome Owner! You can manage liquidity here.</h4>
-                <h4 style={{ color: '#495057', marginBottom: '10px', fontSize: '16px' }}>Add Liquidity (Fixed 0.1 ETH)</h4>
-                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+          {/* Wallet Balance Card */}
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            backdropFilter: 'blur(20px)',
+            borderRadius: '20px', 
+            padding: '30px',
+            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              width: '100px',
+              height: '100px',
+              background: 'linear-gradient(135deg, #4299e1 0%, #3182ce 100%)',
+              borderRadius: '0 20px 0 50%',
+              opacity: 0.1
+            }} />
+            <h3 style={{ color: '#1a202c', marginBottom: '20px', fontSize: '18px', fontWeight: '700' }}>
+              💰 Wallet Balance
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ 
+                  fontSize: '28px', 
+                  fontWeight: '800', 
+                  color: '#4299e1',
+                  marginBottom: '5px'
+                }}>
+                  {parseFloat(walletBalance.eth || 0).toFixed(4)}
+                </div>
+                <div style={{ color: '#718096', fontSize: '14px', fontWeight: '500' }}>ETH</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ 
+                  fontSize: '28px', 
+                  fontWeight: '800', 
+                  color: '#ed8936',
+                  marginBottom: '5px'
+                }}>
+                  {parseFloat(walletBalance.thw || 0).toLocaleString()}
+                </div>
+                <div style={{ color: '#718096', fontSize: '14px', fontWeight: '500' }}>THW</div>
+              </div>
+            </div>
+            <div style={{ 
+              marginTop: '20px', 
+              padding: '15px', 
+              background: 'linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%)',
+              borderRadius: '12px',
+              textAlign: 'center'
+            }}>
+              <div style={{ color: '#4a5568', fontSize: '14px', marginBottom: '5px' }}>Total Value</div>
+              <div style={{ 
+                fontSize: '20px', 
+                fontWeight: '800', 
+                color: '#2d3748'
+              }}>
+                {(parseFloat(walletBalance.eth || 0) + (parseFloat(walletBalance.thw || 0) * parseFloat(currentPrice || 0))).toFixed(4)} ETH
+              </div>
+            </div>
+          </div>
+
+          {/* Pool Liquidity Card */}
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            backdropFilter: 'blur(20px)',
+            borderRadius: '20px', 
+            padding: '30px',
+            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)',
+            border: '1px solid rgba(255, 255, 255, 0.2)',
+            position: 'relative',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              width: '100px',
+              height: '100px',
+              background: 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)',
+              borderRadius: '0 20px 0 50%',
+              opacity: 0.1
+            }} />
+            <h3 style={{ color: '#1a202c', marginBottom: '20px', fontSize: '18px', fontWeight: '700' }}>
+              🏊 Pool Liquidity
+            </h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ 
+                  fontSize: '28px', 
+                  fontWeight: '800', 
+                  color: '#48bb78',
+                  marginBottom: '5px'
+                }}>
+                  {parseFloat(totalTHW || 0).toLocaleString()}
+                </div>
+                <div style={{ color: '#718096', fontSize: '14px', fontWeight: '500' }}>THW</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ 
+                  fontSize: '28px', 
+                  fontWeight: '800', 
+                  color: '#805ad5',
+                  marginBottom: '5px'
+                }}>
+                  {parseFloat(totalETH || 0).toFixed(4)}
+                </div>
+                <div style={{ color: '#718096', fontSize: '14px', fontWeight: '500' }}>ETH</div>
+              </div>
+            </div>
+            <div style={{ 
+              marginTop: '20px', 
+              padding: '15px', 
+              background: 'linear-gradient(135deg, #f0fff4 0%, #e6fffa 100%)',
+              borderRadius: '12px',
+              textAlign: 'center'
+            }}>
+              <div style={{ color: '#4a5568', fontSize: '14px', marginBottom: '5px' }}>Current Price</div>
+              <div style={{ 
+                fontSize: '20px', 
+                fontWeight: '800', 
+                color: '#2d3748'
+              }}>
+                1 THW = {currentPrice || "0.000000"} ETH
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Liquidity Management Section */}
+        {isOwner && account && (
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            backdropFilter: 'blur(20px)',
+            borderRadius: '20px', 
+            padding: '40px',
+            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)',
+            border: '1px solid rgba(255, 255, 255, 0.2)'
+          }}>
+            <div style={{ textAlign: 'center', marginBottom: '40px' }}>
+              <h2 style={{ color: '#1a202c', fontSize: '28px', fontWeight: '800', marginBottom: '10px' }}>
+                🎯 Liquidity Management
+              </h2>
+              <p style={{ color: '#718096', fontSize: '16px' }}>Add or remove liquidity from the pool</p>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '30px' }}>
+              
+              {/* Fixed Amount Liquidity */}
+              <div style={{ 
+                background: 'linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%)',
+                borderRadius: '16px', 
+                padding: '30px',
+                border: '1px solid #e2e8f0'
+              }}>
+                <h3 style={{ color: '#2d3748', marginBottom: '15px', fontSize: '18px', fontWeight: '700' }}>
+                  ⚡ Quick Add (Fixed 0.1 ETH)
+                </h3>
+                <p style={{ color: '#718096', fontSize: '14px', marginBottom: '20px' }}>
+                  Add THW tokens with fixed 0.1 ETH
+                </p>
+                <div style={{ display: 'flex', gap: '12px', marginBottom: '15px' }}>
                   <input
                     type="number"
                     placeholder="THW Amount"
@@ -604,265 +925,418 @@ export default function OwnerDashboard() {
                     onChange={(e) => setLiquidityAmount(e.target.value)}
                     disabled={loading}
                     style={{
-                      padding: '10px',
-                      border: '1px solid #ddd',
-                      borderRadius: '4px',
-                      flex: 1
+                      padding: '14px 16px',
+                      border: '2px solid #e2e8f0',
+                      borderRadius: '10px',
+                      flex: 1,
+                      fontSize: '16px',
+                      background: 'white',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onFocus={(e) => {
+                      e.target.style.borderColor = '#667eea';
+                      e.target.style.boxShadow = '0 0 0 3px rgba(102, 126, 234, 0.1)';
+                    }}
+                    onBlur={(e) => {
+                      e.target.style.borderColor = '#e2e8f0';
+                      e.target.style.boxShadow = 'none';
                     }}
                   />
                   <button
                     onClick={handleAddLiquidity}
-                    disabled={loading || !account}
+                    disabled={loading || !account || !liquidityAmount}
                     style={{
-                      padding: '10px 16px',
-                      backgroundColor: loading || !account ? '#6c757d' : '#28a745',
+                      padding: '14px 24px',
+                      background: loading || !account || !liquidityAmount 
+                        ? '#cbd5e0' 
+                        : 'linear-gradient(135deg, #48bb78 0%, #38a169 100%)',
                       color: 'white',
                       border: 'none',
-                      borderRadius: '4px',
-                      cursor: loading || !account ? 'not-allowed' : 'pointer'
+                      borderRadius: '10px',
+                      cursor: loading || !account || !liquidityAmount ? 'not-allowed' : 'pointer',
+                      fontSize: '16px',
+                      fontWeight: '600',
+                      boxShadow: loading || !account || !liquidityAmount 
+                        ? 'none' 
+                        : '0 10px 30px rgba(72, 187, 120, 0.4)',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onMouseOver={(e) => {
+                      if (!loading && account && liquidityAmount) {
+                        e.target.style.transform = 'translateY(-2px)';
+                        e.target.style.boxShadow = '0 15px 40px rgba(72, 187, 120, 0.5)';
+                      }
+                    }}
+                    onMouseOut={(e) => {
+                      e.target.style.transform = 'translateY(0)';
+                      e.target.style.boxShadow = '0 10px 30px rgba(72, 187, 120, 0.4)';
                     }}
                   >
-                    {loading ? 'Processing...' : 'Add'}
+                    {loading ? '⏳ Processing...' : '➕ Add Liquidity'}
                   </button>
                 </div>
-                <div style={{ fontSize: '12px', color: '#666' }}>
-                  Add THW tokens + 0.1 ETH to the pool
+                <div style={{ fontSize: '12px', color: '#718096', textAlign: 'center' }}>
+                  💡 0.1 ETH will be added automatically
                 </div>
               </div>
 
-              {/* Dual Input Liquidity Section */}
-              <div style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#2d3748', borderRadius: '6px' }}>
-                <h4 style={{ color: '#f7fafc', marginBottom: '15px', fontSize: '16px' }}>Add Liquidity (Price Control)</h4>
+              {/* Custom Amount Liquidity */}
+              <div style={{ 
+                background: 'linear-gradient(135deg, #1a202c 0%, #2d3748 100%)',
+                borderRadius: '16px', 
+                padding: '30px',
+                color: 'white'
+              }}>
+                <h3 style={{ color: 'white', marginBottom: '15px', fontSize: '18px', fontWeight: '700' }}>
+                  🎛️ Custom Add (Price Control)
+                </h3>
+                <p style={{ color: '#a0aec0', fontSize: '14px', marginBottom: '20px' }}>
+                  Set custom ETH and THW amounts
+                </p>
                 
-                {/* Price Preview Section */}
+                {/* Price Preview */}
                 {(parseFloat(addEth) > 0 || parseFloat(addThw) > 0) && (
-                  <div style={{ marginBottom: '15px', padding: '12px', backgroundColor: '#1a202c', borderRadius: '4px', border: '1px solid #4a5568' }}>
-                    <div style={{ fontSize: '13px', color: '#e2e8f0', marginBottom: '8px' }}>
-                      <strong>💰 Price Preview (Before Adding)</strong>
+                  <div style={{ 
+                    marginBottom: '20px', 
+                    padding: '15px', 
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    borderRadius: '10px',
+                    border: '1px solid rgba(255, 255, 255, 0.2)'
+                  }}>
+                    <div style={{ fontSize: '12px', color: '#a0aec0', marginBottom: '8px', textAlign: 'center' }}>
+                      💰 Price Preview
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                      <div>
-                        <p style={{ margin: '0', fontSize: '11px', color: '#a0aec0' }}>Current Price</p>
-                        <p style={{ margin: '0', fontSize: '14px', color: '#f7fafc', fontFamily: 'monospace' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', color: '#a0aec0', marginBottom: '3px' }}>Current</div>
+                        <div style={{ fontSize: '14px', fontWeight: '600' }}>
                           {currentPrice || "0.000000"} ETH
-                        </p>
+                        </div>
                       </div>
-                      
-                      <div style={{ color: '#cbd5e0', fontSize: '18px' }}>→</div>
-                      
-                      <div style={{ textAlign: 'right' }}>
-                        <p style={{ margin: '0', fontSize: '11px', color: '#a0aec0' }}>Next Expected Price</p>
-                        <p style={{ 
-                          margin: '0', 
-                          fontSize: '16px', 
-                          fontFamily: 'monospace', 
-                          fontWeight: 'bold',
+                      <div style={{ color: '#cbd5e0', fontSize: '16px' }}>→</div>
+                      <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', color: '#a0aec0', marginBottom: '3px' }}>Expected</div>
+                        <div style={{ 
+                          fontSize: '14px', 
+                          fontWeight: '600',
                           color: parseFloat(expectedPrice) > parseFloat(currentPrice || 0) ? '#48bb78' : 
-                                 parseFloat(expectedPrice) < parseFloat(currentPrice || 0) ? '#f56565' : '#f7fafc'
+                                 parseFloat(expectedPrice) < parseFloat(currentPrice || 0) ? '#f56565' : '#e2e8f0'
                         }}>
                           {expectedPrice} ETH
-                        </p>
+                        </div>
                       </div>
-                    </div>
-                    
-                    {/* Percentage Change */}
-                    <div style={{ marginTop: '8px', fontSize: '11px', textAlign: 'right' }}>
-                      {(parseFloat(addEth) > 0 || parseFloat(addThw) > 0) && (
-                        <span style={{ 
-                          color: parseFloat(expectedPrice) > parseFloat(currentPrice || 0) ? '#48bb78' : '#f56565' 
-                        }}>
-                          {currentPrice ? (((parseFloat(expectedPrice) - parseFloat(currentPrice)) / parseFloat(currentPrice)) * 100).toFixed(2) : "0.00"}% Change
-                        </span>
-                      )}
                     </div>
                   </div>
                 )}
 
-                {/* Current Pool Ratio */}
-                <div style={{ marginBottom: '15px', padding: '12px', backgroundColor: '#1a202c', borderRadius: '4px', border: '1px solid #4a5568' }}>
-                  <div style={{ fontSize: '13px', color: '#e2e8f0', marginBottom: '8px' }}>
-                    <strong>💰 Current Pool Ratio:</strong>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
-                    <div style={{ color: '#cbd5e0' }}>
-                      <strong>ETH:</strong> {parseFloat(totalETH || 0).toFixed(4)} ETH
-                    </div>
-                    <div style={{ color: '#cbd5e0' }}>
-                      <strong>THW:</strong> {parseFloat(totalTHW || 0).toLocaleString()} THW
-                    </div>
-                  </div>
-                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#f6e05e' }}>
-                    <strong>Current Price:</strong> 1 THW = {currentPrice || "0.000000"} ETH
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px', marginBottom: '15px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '15px' }}>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e0', marginBottom: '5px' }}>Amount of ETH</label>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#a0aec0', marginBottom: '5px' }}>ETH Amount</label>
                     <input 
                       type="number" 
                       value={addEth}
                       onChange={(e) => setAddEth(e.target.value)}
-                      placeholder="0.0 ETH"
+                      placeholder="0.0"
                       disabled={loading}
                       style={{
-                        width: '100%',
-                        padding: '10px',
-                        border: '1px solid #4a5568',
-                        borderRadius: '4px',
-                        backgroundColor: '#1a202c',
-                        color: '#f7fafc',
-                        fontSize: '14px'
+                        padding: '12px',
+                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        background: 'rgba(255, 255, 255, 0.1)',
+                        color: 'white',
+                        width: '100%'
                       }}
                     />
                   </div>
                   <div>
-                    <label style={{ display: 'block', fontSize: '12px', color: '#cbd5e0', marginBottom: '5px' }}>Amount of THW</label>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#a0aec0', marginBottom: '5px' }}>THW Amount</label>
                     <input 
                       type="number" 
                       value={addThw}
                       onChange={(e) => setAddThw(e.target.value)}
-                      placeholder="0 THW"
+                      placeholder="0"
                       disabled={loading}
                       style={{
-                        width: '100%',
-                        padding: '10px',
-                        border: '1px solid #4a5568',
-                        borderRadius: '4px',
-                        backgroundColor: '#1a202c',
-                        color: '#f7fafc',
-                        fontSize: '14px'
+                        padding: '12px',
+                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                        borderRadius: '8px',
+                        fontSize: '14px',
+                        background: 'rgba(255, 255, 255, 0.1)',
+                        color: 'white',
+                        width: '100%'
                       }}
                     />
                   </div>
                 </div>
-                
-                {/* Price Control Examples */}
-                <div style={{ fontSize: '12px', color: '#e2e8f0', marginBottom: '15px', padding: '10px', backgroundColor: '#2d3748', borderRadius: '4px', border: '1px solid #4a5568' }}>
-                  <p style={{ margin: '0 0 8px 0' }}>💡 <strong>Price Control Examples:</strong></p>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                    <div style={{ padding: '10px', backgroundColor: 'rgba(72, 187, 120, 0.1)', borderRadius: '4px', border: '1px solid #48bb78' }}>
-                      <p style={{ margin: '0 0 3px 0', color: '#48bb78', fontWeight: 'bold' }}>� TO PUMP PRICE</p>
-                      <p style={{ margin: '0', fontSize: '11px', color: '#68d391' }}>Add high ETH with low THW</p>
-                      <p style={{ margin: '3px 0 0 0', fontSize: '10px', color: '#9ae6b4' }}>• 1 ETH + 100 THW</p>
-                      <p style={{ margin: '0', fontSize: '10px', color: '#9ae6b4' }}>• 2 ETH + 500 THW</p>
-                    </div>
-                    <div style={{ padding: '10px', backgroundColor: 'rgba(245, 101, 101, 0.1)', borderRadius: '4px', border: '1px solid #f56565' }}>
-                      <p style={{ margin: '0 0 3px 0', color: '#f56565', fontWeight: 'bold' }}>📉 TO DROP PRICE</p>
-                      <p style={{ margin: '0', fontSize: '11px', color: '#fc8181' }}>Add low ETH with high THW</p>
-                      <p style={{ margin: '3px 0 0 0', fontSize: '10px', color: '#feb2b2' }}>• 0.1 ETH + 1000 THW</p>
-                      <p style={{ margin: '0', fontSize: '10px', color: '#feb2b2' }}>• 0.5 ETH + 2000 THW</p>
-                    </div>
-                  </div>
-                  <p style={{ margin: '8px 0 3px 0', fontSize: '11px', color: '#a0aec0' }}>
-                    <strong>Formula:</strong> New Price = Total ETH ÷ Total THW
-                  </p>
-                  <p style={{ margin: '0', fontSize: '11px', color: '#a0aec0' }}>
-                    <strong>Current Ratio:</strong> 1 ETH = {currentPrice ? (1/parseFloat(currentPrice)).toFixed(2) : "0.00"} THW
-                  </p>
-                </div>
-
-                <button 
+                <button
                   onClick={handleAddLiquidityWithPrice}
-                  disabled={loading || !account}
+                  disabled={loading || !account || !addEth || !addThw}
                   style={{
                     width: '100%',
-                    padding: '12px',
-                    backgroundColor: loading || !account ? '#4a5568' : '#f6e05e',
-                    color: '#1a202c',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: loading || !account ? 'not-allowed' : 'pointer',
-                    fontSize: '14px',
-                    fontWeight: 'bold'
-                  }}
-                >
-                  {loading ? 'Processing...' : 'Add Liquidity & Update Price'}
-                </button>
-              </div>
-
-              {/* Remove Liquidity Section */}
-              <div style={{ padding: '15px', backgroundColor: '#f8d7da', borderRadius: '6px' }}>
-                <h4 style={{ color: '#721c24', marginBottom: '10px', fontSize: '16px' }}>Remove All Liquidity (Owner Only)</h4>
-                <div style={{ marginBottom: '10px' }}>
-                  <strong style={{ color: '#721c24' }}>⚠️ Warning:</strong> This will remove all liquidity from the pool and send it back to the owner's wallet.
-                </div>
-                <button
-                  onClick={handleRemoveLiquidity}
-                  disabled={loading || !account}
-                  style={{
-                    padding: '10px 16px',
-                    backgroundColor: loading || !account ? '#6c757d' : '#dc3545',
+                    padding: '14px',
+                    background: loading || !account || !addEth || !addThw 
+                      ? 'rgba(255, 255, 255, 0.2)' 
+                      : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                     color: 'white',
                     border: 'none',
-                    borderRadius: '4px',
-                    cursor: loading || !account ? 'not-allowed' : 'pointer',
-                    fontSize: '14px'
+                    borderRadius: '10px',
+                    cursor: loading || !account || !addEth || !addThw ? 'not-allowed' : 'pointer',
+                    fontSize: '16px',
+                    fontWeight: '600',
+                    transition: 'all 0.3s ease'
+                  }}
+                  onMouseOver={(e) => {
+                    if (!loading && account && addEth && addThw) {
+                      e.target.style.transform = 'translateY(-2px)';
+                    }
+                  }}
+                  onMouseOut={(e) => {
+                    e.target.style.transform = 'translateY(0)';
                   }}
                 >
-                  {loading ? 'Processing...' : 'Remove All Liquidity'}
+                  {loading ? '⏳ Processing...' : '🎛️ Add Custom Liquidity'}
                 </button>
               </div>
-            </>
-          ) : (
-            <div style={{ padding: '15px', backgroundColor: '#f8d7da', borderRadius: '6px', border: '1px solid #f5c6cb' }}>
-              <h4 style={{ color: '#721c24', margin: '0 0 10px 0', fontSize: '16px' }}>
-                🔒 <strong>Owner Only Access</strong>
-              </h4>
-              <p style={{ color: '#721c24', margin: 0 }}>
-                {account ? 'You are not the contract owner. Only the owner can manage liquidity.' : 'Please connect your wallet to continue.'}
-              </p>
-              {contractOwner && (
-                <div style={{ marginTop: '10px', fontSize: '12px', color: '#666' }}>
-                  Contract Owner: {contractOwner.slice(0, 6)}...{contractOwner.slice(-4)}
-                </div>
-              )}
             </div>
-          )}
-        </div>
 
-        {/* Real-time THW/ETH Price Chart */}
-        <div className="bg-[#1a1a1a] p-6 rounded-2xl shadow-2xl mt-8 border border-gray-800">
-            <div className="flex justify-between items-center mb-6">
-                <h2 className="text-white text-xl font-semibold">THW / ETH Price Chart</h2>
-                <div className="text-[#00ff88] font-mono font-bold text-lg">
-                    {chartData.length > 0 ? chartData[chartData.length - 1].price : "0.000000"} ETH
+            {/* Remove Liquidity Button */}
+            <div style={{ textAlign: 'center', marginTop: '30px' }}>
+              <button
+                onClick={handleRemoveLiquidity}
+                disabled={loading || !account}
+                style={{
+                  padding: '14px 32px',
+                  background: loading || !account 
+                    ? '#e2e8f0' 
+                    : 'linear-gradient(135deg, #f56565 0%, #ed8936 100%)',
+                  color: loading || !account ? '#a0aec0' : 'white',
+                  border: 'none',
+                  borderRadius: '12px',
+                  cursor: loading || !account ? 'not-allowed' : 'pointer',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  boxShadow: loading || !account 
+                    ? 'none' 
+                    : '0 10px 30px rgba(245, 101, 101, 0.3)',
+                  transition: 'all 0.3s ease'
+                }}
+                onMouseOver={(e) => {
+                  if (!loading && account) {
+                    e.target.style.transform = 'translateY(-2px)';
+                    e.target.style.boxShadow = '0 15px 40px rgba(245, 101, 101, 0.4)';
+                  }
+                }}
+                onMouseOut={(e) => {
+                  e.target.style.transform = 'translateY(0)';
+                  e.target.style.boxShadow = '0 10px 30px rgba(245, 101, 101, 0.3)';
+                }}
+              >
+                {loading ? '⏳ Processing...' : '🗑️ Remove All Liquidity'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Not Owner Message */}
+        {!isOwner && account && (
+          <div style={{ 
+            background: 'rgba(255, 255, 255, 0.95)', 
+            backdropFilter: 'blur(20px)',
+            borderRadius: '20px', 
+            padding: '40px',
+            textAlign: 'center',
+            boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)',
+            border: '1px solid rgba(255, 255, 255, 0.2)'
+          }}>
+            <div style={{ fontSize: '48px', marginBottom: '20px' }}>🔒</div>
+            <h2 style={{ color: '#1a202c', fontSize: '24px', fontWeight: '700', marginBottom: '10px' }}>
+              Access Restricted
+            </h2>
+            <p style={{ color: '#718096', fontSize: '16px' }}>
+              Only the contract owner can manage liquidity. You are connected as a viewer.
+            </p>
+          </div>
+        )}
+
+        {/* Price Chart Section */}
+        <div style={{ 
+          background: 'rgba(255, 255, 255, 0.95)', 
+          backdropFilter: 'blur(20px)',
+          borderRadius: '20px', 
+          padding: '40px',
+          marginTop: '30px',
+          boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)',
+          border: '1px solid rgba(255, 255, 255, 0.2)'
+        }}>
+          <div style={{ textAlign: 'center', marginBottom: '30px' }}>
+            <h2 style={{ color: '#1a202c', fontSize: '24px', fontWeight: '800', marginBottom: '10px' }}>
+              📈 THW/ETH Price Chart
+            </h2>
+            <p style={{ color: '#718096', fontSize: '16px' }}>
+              Real-time price tracking (Last 20 updates)
+            </p>
+          </div>
+
+          {/* Current Price Display */}
+          <div style={{ 
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            borderRadius: '16px', 
+            padding: '20px',
+            marginBottom: '30px',
+            textAlign: 'center',
+            color: 'white'
+          }}>
+            <div style={{ fontSize: '14px', marginBottom: '5px', opacity: 0.9 }}>
+              Current Price
+            </div>
+            <div style={{ 
+              fontSize: '32px', 
+              fontWeight: '800', 
+              fontFamily: 'monospace'
+            }}>
+              {currentPrice || "0.000000"} ETH
+            </div>
+            <div style={{ fontSize: '12px', marginTop: '5px', opacity: 0.8 }}>
+              1 THW = {currentPrice || "0.000000"} ETH
+            </div>
+          </div>
+
+          {/* Chart Container */}
+          <div style={{ 
+            background: 'linear-gradient(135deg, #1a202c 0%, #2d3748 100%)',
+            borderRadius: '16px', 
+            padding: '30px',
+            height: '400px',
+            position: 'relative'
+          }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <defs>
+                  <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#667eea" stopOpacity={0.8}/>
+                    <stop offset="95%" stopColor="#764ba2" stopOpacity={0.2}/>
+                  </linearGradient>
+                </defs>
+                
+                <CartesianGrid 
+                  strokeDasharray="3 3" 
+                  stroke="rgba(255, 255, 255, 0.1)" 
+                  vertical={false} 
+                />
+                
+                <XAxis 
+                  dataKey="time" 
+                  stroke="#a0aec0" 
+                  fontSize={12} 
+                  tickMargin={10}
+                  tick={{ fill: '#a0aec0' }}
+                />
+                
+                <YAxis 
+                  domain={['auto', 'auto']}
+                  stroke="#a0aec0" 
+                  fontSize={12} 
+                  tickFormatter={(val) => parseFloat(val).toFixed(6)}
+                  tick={{ fill: '#a0aec0' }}
+                />
+                
+                <Tooltip 
+                  contentStyle={{ 
+                    backgroundColor: 'rgba(26, 32, 44, 0.95)', 
+                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                    borderRadius: '8px',
+                    color: 'white',
+                    backdropFilter: 'blur(10px)'
+                  }}
+                  labelStyle={{ color: '#a0aec0', fontSize: '12px' }}
+                  itemStyle={{ color: '#667eea', fontWeight: '600' }}
+                  formatter={(value) => [`${parseFloat(value).toFixed(6)} ETH`, 'Price']}
+                />
+                
+                <Line 
+                  type="monotone" 
+                  dataKey="price" 
+                  stroke="url(#colorGradient)" 
+                  strokeWidth={3}
+                  dot={{ fill: '#667eea', r: 4, strokeWidth: 2, stroke: '#fff' }}
+                  activeDot={{ r: 6, fill: '#764ba2' }}
+                  name="THW/ETH Price"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+            
+            {/* Chart Overlay Info */}
+            {chartData.length === 0 && (
+              <div style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                textAlign: 'center',
+                color: '#a0aec0'
+              }}>
+                <div style={{ fontSize: '48px', marginBottom: '10px' }}>📊</div>
+                <div style={{ fontSize: '16px' }}>No price data yet</div>
+                <div style={{ fontSize: '14px', marginTop: '5px' }}>
+                  Add liquidity to start tracking prices
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Chart Stats */}
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
+            gap: '20px', 
+            marginTop: '30px' 
+          }}>
+            <div style={{ 
+              background: 'linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%)',
+              borderRadius: '12px', 
+              padding: '20px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '14px', color: '#718096', marginBottom: '5px' }}>
+                Data Points
+              </div>
+              <div style={{ fontSize: '24px', fontWeight: '800', color: '#2d3748' }}>
+                {chartData.length}
+              </div>
             </div>
             
-            <div style={{ width: '100%', height: 350 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
-                        <XAxis 
-                            dataKey="time" 
-                            stroke="#888" 
-                            fontSize={12} 
-                            tickMargin={10}
-                        />
-                        <YAxis 
-                            domain={['auto', 'auto']} // මිල අනුව graph එක auto scale වේ
-                            stroke="#888" 
-                            fontSize={12} 
-                            tickFormatter={(val) => parseFloat(val).toFixed(4)}
-                        />
-                        <Tooltip 
-                            contentStyle={{ backgroundColor: '#222', border: 'none', borderRadius: '8px', color: '#fff' }}
-                            itemStyle={{ color: '#00ff88' }}
-                        />
-                        <Line 
-                            type="monotone" 
-                            dataKey="price" 
-                            stroke="#00ff88" 
-                            strokeWidth={3} 
-                            dot={false} // Points පෙන්වන්නේ නැතිව line එක විතරක්
-                            animationDuration={1000}
-                        />
-                    </LineChart>
-                </ResponsiveContainer>
+            <div style={{ 
+              background: 'linear-gradient(135deg, #f0fff4 0%, #e6fffa 100%)',
+              borderRadius: '12px', 
+              padding: '20px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '14px', color: '#718096', marginBottom: '5px' }}>
+                Last Update
+              </div>
+              <div style={{ fontSize: '16px', fontWeight: '700', color: '#2d3748' }}>
+                {chartData.length > 0 ? chartData[chartData.length - 1].time : '--:--:--'}
+              </div>
             </div>
+            
+            <div style={{ 
+              background: 'linear-gradient(135deg, #fffbf0 0%, #fef5e7 100%)',
+              borderRadius: '12px', 
+              padding: '20px',
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: '14px', color: '#718096', marginBottom: '5px' }}>
+                Auto Refresh
+              </div>
+              <div style={{ fontSize: '16px', fontWeight: '700', color: '#2d3748' }}>
+                Every 10 seconds
+              </div>
+            </div>
+          </div>
         </div>
+
       </div>
     </div>
   );
-}
+}; 
